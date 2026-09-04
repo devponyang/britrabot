@@ -1,6 +1,7 @@
 import json
 import os
 import datetime
+import re
 
 import discord
 from discord import app_commands
@@ -59,6 +60,47 @@ class Automation(commands.Cog):
     async def setlog(self, interaction: discord.Interaction, channel: discord.TextChannel):
         set_guild_config(interaction.guild.id, "log_channel", channel.id)
         await interaction.response.send_message(f"✅ 로그 채널을 {channel.mention} 으로 설정했어요.")
+
+    @app_commands.command(name="티켓생성", description="지정한 멤버와 관리자만 볼 수 있는 티켓 채널을 생성합니다.")
+    @app_commands.describe(member="티켓을 생성할 멤버", category="티켓 채널을 넣을 카테고리")
+    @app_commands.checks.has_permissions(administrator=True)
+    async def create_ticket(
+        self,
+        interaction: discord.Interaction,
+        member: discord.Member,
+        category: discord.CategoryChannel | None = None,
+    ):
+        safe_name = re.sub(r"[^0-9A-Za-z가-힣_-]", "-", member.display_name).strip("-")
+        channel_name = f"티켓-{safe_name or member.id}"[:100]
+        overwrites = {
+            interaction.guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            member: discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, read_message_history=True
+            ),
+            interaction.guild.me: discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True,
+                manage_channels=True,
+                manage_messages=True,
+            ),
+        }
+        try:
+            channel = await interaction.guild.create_text_channel(
+                channel_name,
+                category=category,
+                overwrites=overwrites,
+                topic=f"티켓 대상: {member} ({member.id})",
+                reason=f"관리자 {interaction.user}가 티켓 생성",
+            )
+        except discord.Forbidden:
+            return await interaction.response.send_message(
+                "❌ 봇에게 채널 관리 권한이 없어 티켓을 만들 수 없어요.", ephemeral=True
+            )
+        await channel.send(f"{member.mention} 님의 티켓이 생성됐어요. 문의 내용을 남겨주세요.")
+        await interaction.response.send_message(
+            f"✅ 티켓 채널 {channel.mention}을 생성했어요.", ephemeral=True
+        )
 
     # ---------- 슬래시 명령어 에러 처리 ----------
     async def cog_app_command_error(

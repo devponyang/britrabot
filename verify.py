@@ -3,6 +3,7 @@ import os
 import random
 import string
 import datetime
+import time
 
 import discord
 from discord import app_commands
@@ -18,6 +19,9 @@ DEFAULT_ARTICLE_URL = (
     "?articleId=6a9a6c96feeef62e67566500&categoryId=69094e85a7d3dc347cdf1e18"
 )
 DEFAULT_TARGET_SERVER = "브리트라"
+AUTOMATION_CONFIG_FILE = "guild_config.json"
+MAX_VERIFY_ATTEMPTS = 3
+VERIFY_COOLDOWN_SECONDS = 10 * 60
 
 
 # ---------------- 저장소 헬퍼 ----------------
@@ -55,11 +59,14 @@ def generate_code() -> str:
 
 def save_pending_code(user_id: int, guild_id: int, code: str):
     data = _load(CODE_FILE)
+    previous = data.get(str(user_id), {})
     data[str(user_id)] = {
         "code": code,
         "guild_id": guild_id,
         "created_at": datetime.datetime.utcnow().isoformat(),
-        "verified": False,
+        "verified": previous.get("verified", False),
+        "attempts": previous.get("attempts", 0),
+        "cooldown_until": previous.get("cooldown_until", 0),
     }
     _save(CODE_FILE, data)
 
@@ -76,6 +83,50 @@ def mark_verified(user_id: int):
         _save(CODE_FILE, data)
 
 
+def get_cooldown_remaining(user_id: int) -> int:
+    pending = get_pending_code(user_id)
+    if not pending:
+        return 0
+    return max(0, int(float(pending.get("cooldown_until", 0)) - time.time()))
+
+
+def record_verification_failure(user_id: int) -> tuple[int, int]:
+    data = _load(CODE_FILE)
+    pending = data.get(str(user_id), {})
+    attempts = int(pending.get("attempts", 0)) + 1
+    cooldown_until = 0
+    if attempts >= MAX_VERIFY_ATTEMPTS:
+        cooldown_until = time.time() + VERIFY_COOLDOWN_SECONDS
+    pending["attempts"] = attempts
+    pending["cooldown_until"] = cooldown_until
+    data[str(user_id)] = pending
+    _save(CODE_FILE, data)
+    return attempts, int(max(0, cooldown_until - time.time()))
+
+
+async def log_verification(guild: discord.Guild, message: str):
+    config = _load(AUTOMATION_CONFIG_FILE).get(str(guild.id), {})
+    channel_id = config.get("log_channel")
+    if not channel_id:
+        return
+    channel = guild.get_channel(channel_id)
+    if channel:
+        await channel.send(f"🔐 {message}")
+
+
+async def send_verification_failure(
+    interaction: discord.Interaction, message: str, reason: str
+):
+    attempts, cooldown = record_verification_failure(interaction.user.id)
+    await log_verification(
+        interaction.guild,
+        f"실패: {interaction.user} ({interaction.user.id}) - {reason} ({attempts}/{MAX_VERIFY_ATTEMPTS})",
+    )
+    if cooldown:
+        message += "\n⚠️ 실패 횟수를 초과해 10분 동안 재시도할 수 없어요."
+    return await interaction.followup.send(message, ephemeral=True)
+
+
 # ---------------- 버튼 UI ----------------
 class VerifyPanelView(discord.ui.View):
     """인증 센터에 올라가는 '인증진행' 버튼 (영구 View)"""
@@ -87,6 +138,17 @@ class VerifyPanelView(discord.ui.View):
         label="인증진행", style=discord.ButtonStyle.success, custom_id="verify:start"
     )
     async def start_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        pending = get_pending_code(interaction.user.id)
+        if pending and pending.get("verified"):
+            return await interaction.response.send_message(
+                "✅ 이미 인증된 사용자예요.", ephemeral=True
+            )
+        cooldown = get_cooldown_remaining(interaction.user.id)
+        if cooldown:
+            return await interaction.response.send_message(
+                f"⚠️ 인증 실패 횟수를 초과했어요. {max(1, (cooldown + 59) // 60)}분 후 다시 시도해주세요.",
+                ephemeral=True,
+            )
         code = generate_code()
         save_pending_code(interaction.user.id, interaction.guild.id, code)
         config = get_guild_config(interaction.guild.id)
@@ -129,6 +191,16 @@ class VerifyCodeView(discord.ui.View):
                 "❌ 발급된 인증 코드가 없어요. 먼저 **인증진행** 버튼을 눌러주세요.",
                 ephemeral=True,
             )
+        if pending.get("verified"):
+            return await interaction.response.send_message(
+                "✅ 이미 인증된 사용자예요.", ephemeral=True
+            )
+        cooldown = get_cooldown_remaining(interaction.user.id)
+        if cooldown:
+            return await interaction.response.send_message(
+                f"⚠️ 잠시 후 다시 시도해주세요. 남은 시간: {max(1, (cooldown + 59) // 60)}분",
+                ephemeral=True,
+            )
 
         await interaction.response.defer(ephemeral=True)
 
@@ -148,9 +220,10 @@ class VerifyCodeView(discord.ui.View):
             )
 
         if not comment:
-            return await interaction.followup.send(
+            return await send_verification_failure(
+                interaction,
                 "❌ 아직 해당 코드가 적힌 댓글을 찾지 못했어요. 댓글을 작성했는지 확인 후 다시 시도해주세요.",
-                ephemeral=True,
+                "코드 댓글을 찾지 못함",
             )
 
         try:
@@ -166,15 +239,18 @@ class VerifyCodeView(discord.ui.View):
             )
 
         if not char_info:
-            return await interaction.followup.send(
-                f"❌ `{comment['nickname']}` 캐릭터 정보를 찾을 수 없어요.", ephemeral=True
+            return await send_verification_failure(
+                interaction,
+                f"❌ `{comment['nickname']}` 캐릭터 정보를 찾을 수 없어요.",
+                "캐릭터 정보를 찾지 못함",
             )
 
         if char_info["server"] != config["target_server"]:
-            return await interaction.followup.send(
+            return await send_verification_failure(
+                interaction,
                 f"❌ `{char_info['nickname']}` 님은 **{char_info['server']}** 서버 소속이라 "
                 f"인증 대상({config['target_server']} 서버)이 아니에요.",
-                ephemeral=True,
+                "인증 대상 서버와 불일치",
             )
 
         # ---- 인증 성공: 역할 부여 ----
@@ -204,6 +280,10 @@ class VerifyCodeView(discord.ui.View):
             nickname_changed = False
 
         mark_verified(interaction.user.id)
+        await log_verification(
+            interaction.guild,
+            f"성공: {interaction.user} ({interaction.user.id}) - {discord_nickname}",
+        )
 
         embed = discord.Embed(title="✅ 인증 완료", color=discord.Color.green())
         embed.add_field(name="닉네임", value=char_info["nickname"], inline=True)
