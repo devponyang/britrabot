@@ -1,0 +1,7 @@
+.env
+__pycache__/
+*.py[cod]
+verify_codes.json
+verify_config.json
+guild_config.json
+warnings.json
