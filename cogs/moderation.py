@@ -30,7 +30,7 @@ class Moderation(commands.Cog):
     # ---------- 경고 부여 ----------
     @app_commands.command(name="경고", description="멤버에게 경고를 부여합니다.")
     @app_commands.describe(member="대상 멤버", reason="경고 사유")
-    @app_commands.checks.has_permissions(moderate_members=True)
+    @app_commands.checks.has_permissions(administrator=True)
     async def warn(
         self,
         interaction: discord.Interaction,
@@ -59,6 +59,7 @@ class Moderation(commands.Cog):
     # ---------- 경고 내역 조회 ----------
     @app_commands.command(name="경고내역", description="멤버의 경고 내역을 확인합니다.")
     @app_commands.describe(member="대상 멤버")
+    @app_commands.checks.has_permissions(administrator=True)
     async def warnings_cmd(self, interaction: discord.Interaction, member: discord.Member):
         data = load_warnings()
         guild_id = str(interaction.guild.id)
@@ -97,7 +98,7 @@ class Moderation(commands.Cog):
     # ---------- 메시지 대량 삭제 ----------
     @app_commands.command(name="메시지삭제", description="최근 메시지를 지정한 개수만큼 삭제합니다.")
     @app_commands.describe(amount="삭제할 메시지 개수(1~100)")
-    @app_commands.checks.has_permissions(manage_messages=True)
+    @app_commands.checks.has_permissions(administrator=True)
     async def purge(self, interaction: discord.Interaction, amount: int):
         if not interaction.guild.me.guild_permissions.manage_messages:
             return await interaction.response.send_message(
