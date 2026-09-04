@@ -28,7 +28,7 @@ class Moderation(commands.Cog):
         self.bot = bot
 
     # ---------- 경고 부여 ----------
-    @app_commands.command(name="warn", description="멤버에게 경고를 부여합니다.")
+    @app_commands.command(name="경고", description="멤버에게 경고를 부여합니다.")
     @app_commands.describe(member="대상 멤버", reason="경고 사유")
     @app_commands.checks.has_permissions(moderate_members=True)
     async def warn(
@@ -57,7 +57,7 @@ class Moderation(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     # ---------- 경고 내역 조회 ----------
-    @app_commands.command(name="warnings", description="멤버의 경고 내역을 확인합니다.")
+    @app_commands.command(name="경고내역", description="멤버의 경고 내역을 확인합니다.")
     @app_commands.describe(member="대상 멤버")
     async def warnings_cmd(self, interaction: discord.Interaction, member: discord.Member):
         data = load_warnings()
@@ -80,7 +80,7 @@ class Moderation(commands.Cog):
         await interaction.response.send_message(embed=embed)
 
     # ---------- 경고 초기화 ----------
-    @app_commands.command(name="clearwarnings", description="멤버의 경고 내역을 모두 삭제합니다.")
+    @app_commands.command(name="경고초기화", description="멤버의 경고 내역을 모두 삭제합니다.")
     @app_commands.describe(member="대상 멤버")
     @app_commands.checks.has_permissions(administrator=True)
     async def clearwarnings(self, interaction: discord.Interaction, member: discord.Member):
@@ -95,7 +95,7 @@ class Moderation(commands.Cog):
         )
 
     # ---------- 메시지 대량 삭제 ----------
-    @app_commands.command(name="purge", description="최근 메시지를 지정한 개수만큼 삭제합니다.")
+    @app_commands.command(name="메시지삭제", description="최근 메시지를 지정한 개수만큼 삭제합니다.")
     @app_commands.describe(amount="삭제할 메시지 개수(1~100)")
     @app_commands.checks.has_permissions(manage_messages=True)
     async def purge(self, interaction: discord.Interaction, amount: int):
