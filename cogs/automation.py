@@ -60,19 +60,6 @@ class Automation(commands.Cog):
         set_guild_config(interaction.guild.id, "log_channel", channel.id)
         await interaction.response.send_message(f"✅ 로그 채널을 {channel.mention} 으로 설정했어요.")
 
-    @app_commands.command(name="자동역할설정", description="신규 멤버에게 자동으로 부여할 역할을 설정합니다.")
-    @app_commands.describe(role="자동으로 부여할 역할")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def setautorole(self, interaction: discord.Interaction, role: discord.Role):
-        set_guild_config(interaction.guild.id, "autorole", role.id)
-        await interaction.response.send_message(f"✅ 자동 부여 역할을 `{role.name}` 으로 설정했어요.")
-
-    @app_commands.command(name="자동역할끄기", description="자동 역할 부여 기능을 끕니다.")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def autorole_off(self, interaction: discord.Interaction):
-        set_guild_config(interaction.guild.id, "autorole", None)
-        await interaction.response.send_message("✅ 자동 역할 부여 기능을 껐어요.")
-
     # ---------- 슬래시 명령어 에러 처리 ----------
     async def cog_app_command_error(
         self, interaction: discord.Interaction, error: app_commands.AppCommandError
