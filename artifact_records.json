@@ -1,0 +1,357 @@
+{
+  "시엘 VS 이스라펠": {
+    "updated_at": "2026-09-07T00:00:00+09:00",
+    "source_url": "",
+    "records": [
+      {
+        "date": "2026-08-26",
+        "round": "1차전",
+        "scores": ["4:2"],
+        "cells": [],
+        "images": []
+      },
+      {
+        "date": "2026-08-29",
+        "round": "2차전",
+        "scores": ["3:3"],
+        "cells": [],
+        "images": []
+      },
+      {
+        "date": "2026-09-02",
+        "round": "3차전",
+        "scores": ["3:3"],
+        "cells": [],
+        "images": []
+      },
+      {
+        "date": "2026-09-05",
+        "round": "4차전",
+        "scores": ["1:5"],
+        "cells": [],
+        "images": []
+      }
+    ],
+    "record": {
+      "url": "",
+      "opponent_server": "이스라펠",
+      "opponent_capture_count": null,
+      "breitra_capture_count": null,
+      "completion": "9월 5일 (4차전)",
+      "matchup": {
+        "round": "4차전",
+        "breitra_result": "LOSE",
+        "opponent_result": "WIN",
+        "breitra_round": 1,
+        "opponent_round": 5,
+        "breitra_total": 11,
+        "opponent_total": 13
+      }
+    }
+  },
+  "지켈 VS 아스펠": {
+    "updated_at": "2026-09-07T00:00:00+09:00",
+    "source_url": "",
+    "records": [
+      {"date": "2026-08-26", "round": "1차전", "scores": ["4:2"], "cells": [], "images": []},
+      {"date": "2026-08-29", "round": "2차전", "scores": ["5:1"], "cells": [], "images": []},
+      {"date": "2026-09-02", "round": "3차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-09-05", "round": "4차전", "scores": ["5:1"], "cells": [], "images": []}
+    ],
+    "record": {"url": "", "opponent_server": "아스펠", "opponent_capture_count": null, "breitra_capture_count": null, "completion": "9월 5일 (4차전)", "matchup": {"round": "4차전", "breitra_result": "WIN", "opponent_result": "LOSE", "breitra_round": 5, "opponent_round": 1, "breitra_total": 17, "opponent_total": 7}}
+  },
+  "바이젤 VS 에레슈키갈": {
+    "updated_at": "2026-09-07T00:00:00+09:00", "source_url": "",
+    "records": [
+      {"date": "2026-08-26", "round": "1차전", "scores": ["1:5"], "cells": [], "images": []},
+      {"date": "2026-08-29", "round": "2차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-09-02", "round": "3차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-09-05", "round": "4차전", "scores": ["3:3"], "cells": [], "images": []}
+    ],
+    "record": {"url": "", "opponent_server": "에레슈키갈", "opponent_capture_count": null, "breitra_capture_count": null, "completion": "9월 5일 (4차전)", "matchup": {"round": "4차전", "breitra_result": "DRAW", "opponent_result": "DRAW", "breitra_round": 3, "opponent_round": 3, "breitra_total": 10, "opponent_total": 14}}
+  },
+  "카이시넬 VS 네자칸": {
+    "updated_at": "2026-09-07T00:00:00+09:00", "source_url": "",
+    "records": [
+      {"date": "2026-08-26", "round": "1차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-08-29", "round": "2차전", "scores": ["5:1"], "cells": [], "images": []},
+      {"date": "2026-09-02", "round": "3차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-09-05", "round": "4차전", "scores": ["5:1"], "cells": [], "images": []}
+    ],
+    "record": {"url": "", "opponent_server": "네자칸", "opponent_capture_count": null, "breitra_capture_count": null, "completion": "9월 5일 (4차전)", "matchup": {"round": "4차전", "breitra_result": "WIN", "opponent_result": "LOSE", "breitra_round": 5, "opponent_round": 1, "breitra_total": 16, "opponent_total": 8}}
+  },
+  "마르쿠탄 VS 트리니엘": {
+    "updated_at": "2026-09-07T00:00:00+09:00", "source_url": "",
+    "records": [
+      {"date": "2026-08-26", "round": "1차전", "scores": ["2:4"], "cells": [], "images": []},
+      {"date": "2026-08-29", "round": "2차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-09-02", "round": "3차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-09-05", "round": "4차전", "scores": ["2:4"], "cells": [], "images": []}
+    ],
+    "record": {"url": "", "opponent_server": "트리니엘", "opponent_capture_count": null, "breitra_capture_count": null, "completion": "9월 5일 (4차전)", "matchup": {"round": "4차전", "breitra_result": "LOSE", "opponent_result": "WIN", "breitra_round": 2, "opponent_round": 4, "breitra_total": 10, "opponent_total": 14}}
+  },
+  "유스티엘 VS 바바룽": {
+    "updated_at": "2026-09-07T00:00:00+09:00", "source_url": "",
+    "records": [
+      {"date": "2026-08-26", "round": "1차전", "scores": ["2:4"], "cells": [], "images": []},
+      {"date": "2026-08-29", "round": "2차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-09-02", "round": "3차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-09-05", "round": "4차전", "scores": ["2:4"], "cells": [], "images": []}
+    ],
+    "record": {"url": "", "opponent_server": "바바룽", "opponent_capture_count": null, "breitra_capture_count": null, "completion": "9월 5일 (4차전)", "matchup": {"round": "4차전", "breitra_result": "LOSE", "opponent_result": "WIN", "breitra_round": 2, "opponent_round": 4, "breitra_total": 10, "opponent_total": 14}}
+  },
+  "아리엘 VS 루미엘": {
+    "updated_at": "2026-09-07T00:00:00+09:00", "source_url": "",
+    "records": [
+      {"date": "2026-08-26", "round": "1차전", "scores": ["2:4"], "cells": [], "images": []},
+      {"date": "2026-08-29", "round": "2차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-09-02", "round": "3차전", "scores": ["2:4"], "cells": [], "images": []},
+      {"date": "2026-09-05", "round": "4차전", "scores": ["2:4"], "cells": [], "images": []}
+    ],
+    "record": {"url": "", "opponent_server": "루미엘", "opponent_capture_count": null, "breitra_capture_count": null, "completion": "9월 5일 (4차전)", "matchup": {"round": "4차전", "breitra_result": "LOSE", "opponent_result": "WIN", "breitra_round": 2, "opponent_round": 4, "breitra_total": 9, "opponent_total": 15}}
+  },
+  "히타니에 VS 다미누": {
+    "updated_at": "2026-09-07T00:00:00+09:00", "source_url": "",
+    "records": [
+      {"date": "2026-08-26", "round": "1차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-08-29", "round": "2차전", "scores": ["2:4"], "cells": [], "images": []},
+      {"date": "2026-09-02", "round": "3차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-09-05", "round": "4차전", "scores": ["3:3"], "cells": [], "images": []}
+    ],
+    "record": {"url": "", "opponent_server": "다미누", "opponent_capture_count": null, "breitra_capture_count": null, "completion": "9월 5일 (4차전)", "matchup": {"round": "4차전", "breitra_result": "DRAW", "opponent_result": "DRAW", "breitra_round": 3, "opponent_round": 3, "breitra_total": 11, "opponent_total": 13}}
+  },
+  "나니아 VS 이슈타르": {
+    "updated_at": "2026-09-07T00:00:00+09:00", "source_url": "",
+    "records": [
+      {"date": "2026-08-26", "round": "1차전", "scores": ["1:5"], "cells": [], "images": []},
+      {"date": "2026-08-29", "round": "2차전", "scores": ["0:6"], "cells": [], "images": []},
+      {"date": "2026-09-02", "round": "3차전", "scores": ["0:6"], "cells": [], "images": []},
+      {"date": "2026-09-05", "round": "4차전", "scores": ["1:5"], "cells": [], "images": []}
+    ],
+    "record": {"url": "", "opponent_server": "이슈타르", "opponent_capture_count": null, "breitra_capture_count": null, "completion": "9월 5일 (4차전)", "matchup": {"round": "4차전", "breitra_result": "WIN", "opponent_result": "LOSE", "breitra_round": 1, "opponent_round": 5, "breitra_total": 2, "opponent_total": 22}}
+  },
+  "루드라 VS 브리트라": {
+    "updated_at": "2026-09-07T00:00:00+09:00", "source_url": "",
+    "records": [
+      {"date": "2026-08-26", "round": "1차전", "scores": ["4:2"], "cells": [], "images": []},
+      {"date": "2026-08-29", "round": "2차전", "scores": ["4:2"], "cells": [], "images": []},
+      {"date": "2026-09-02", "round": "3차전", "scores": ["4:2"], "cells": [], "images": []},
+      {"date": "2026-09-05", "round": "4차전", "scores": ["3:3"], "cells": [], "images": []}
+    ],
+    "record": {"url": "", "opponent_server": "브리트라", "opponent_capture_count": null, "breitra_capture_count": null, "completion": "9월 5일 (4차전)", "matchup": {"round": "4차전", "breitra_result": "DRAW", "opponent_result": "DRAW", "breitra_round": 3, "opponent_round": 3, "breitra_total": 15, "opponent_total": 9}}
+  },
+  "타하바타 VS 파프니르": {
+    "updated_at": "2026-09-07T00:00:00+09:00", "source_url": "",
+    "records": [
+      {"date": "2026-08-26", "round": "1차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-08-29", "round": "2차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-09-02", "round": "3차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-09-05", "round": "4차전", "scores": ["3:3"], "cells": [], "images": []}
+    ],
+    "record": {"url": "", "opponent_server": "파프니르", "opponent_capture_count": null, "breitra_capture_count": null, "completion": "9월 5일 (4차전)", "matchup": {"round": "4차전", "breitra_result": "DRAW", "opponent_result": "DRAW", "breitra_round": 3, "opponent_round": 3, "breitra_total": 12, "opponent_total": 12}}
+  },
+  "루터스 VS 코치룽": {
+    "updated_at": "2026-09-07T00:00:00+09:00", "source_url": "",
+    "records": [
+      {"date": "2026-08-26", "round": "1차전", "scores": ["2:4"], "cells": [], "images": []},
+      {"date": "2026-08-29", "round": "2차전", "scores": ["0:6"], "cells": [], "images": []},
+      {"date": "2026-09-02", "round": "3차전", "scores": ["1:5"], "cells": [], "images": []},
+      {"date": "2026-09-05", "round": "4차전", "scores": ["1:5"], "cells": [], "images": []}
+    ],
+    "record": {"url": "", "opponent_server": "코치룽", "opponent_capture_count": null, "breitra_capture_count": null, "completion": "9월 5일 (4차전)", "matchup": {"round": "4차전", "breitra_result": "LOSE", "opponent_result": "WIN", "breitra_round": 1, "opponent_round": 5, "breitra_total": 4, "opponent_total": 20}}
+  },
+  "페르노스 VS 울고른": {
+    "updated_at": "2026-09-07T00:00:00+09:00", "source_url": "",
+    "records": [
+      {"date": "2026-08-26", "round": "1차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-08-29", "round": "2차전", "scores": ["2:4"], "cells": [], "images": []},
+      {"date": "2026-09-02", "round": "3차전", "scores": ["2:4"], "cells": [], "images": []},
+      {"date": "2026-09-05", "round": "4차전", "scores": ["3:3"], "cells": [], "images": []}
+    ],
+    "record": {"url": "", "opponent_server": "울고른", "opponent_capture_count": null, "breitra_capture_count": null, "completion": "9월 5일 (4차전)", "matchup": {"round": "4차전", "breitra_result": "DRAW", "opponent_result": "DRAW", "breitra_round": 3, "opponent_round": 3, "breitra_total": 10, "opponent_total": 14}}
+  },
+  "젠카카 VS 무닌": {
+    "updated_at": "2026-09-07T00:00:00+09:00", "source_url": "",
+    "records": [
+      {"date": "2026-08-26", "round": "1차전", "scores": ["2:4"], "cells": [], "images": []},
+      {"date": "2026-08-29", "round": "2차전", "scores": ["1:5"], "cells": [], "images": []},
+      {"date": "2026-09-02", "round": "3차전", "scores": ["4:2"], "cells": [], "images": []},
+      {"date": "2026-09-05", "round": "4차전", "scores": ["3:3"], "cells": [], "images": []}
+    ],
+    "record": {"url": "", "opponent_server": "무닌", "opponent_capture_count": null, "breitra_capture_count": null, "completion": "9월 5일 (4차전)", "matchup": {"round": "4차전", "breitra_result": "DRAW", "opponent_result": "DRAW", "breitra_round": 3, "opponent_round": 3, "breitra_total": 10, "opponent_total": 14}}
+  },
+  "카사카 VS 콰이링": {
+    "updated_at": "2026-09-07T00:00:00+09:00", "source_url": "",
+    "records": [
+      {"date": "2026-08-26", "round": "1차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-08-29", "round": "2차전", "scores": ["5:1"], "cells": [], "images": []},
+      {"date": "2026-09-02", "round": "3차전", "scores": ["6:0"], "cells": [], "images": []},
+      {"date": "2026-09-05", "round": "4차전", "scores": ["5:1"], "cells": [], "images": []}
+    ],
+    "record": {"url": "", "opponent_server": "콰이링", "opponent_capture_count": null, "breitra_capture_count": null, "completion": "9월 5일 (4차전)", "matchup": {"round": "4차전", "breitra_result": "WIN", "opponent_result": "LOSE", "breitra_round": 5, "opponent_round": 1, "breitra_total": 19, "opponent_total": 5}}
+  },
+  "크로메데 VS 네몬": {
+    "updated_at": "2026-09-07T00:00:00+09:00", "source_url": "",
+    "records": [
+      {"date": "2026-08-26", "round": "1차전", "scores": ["1:5"], "cells": [], "images": []},
+      {"date": "2026-08-29", "round": "2차전", "scores": ["0:6"], "cells": [], "images": []},
+      {"date": "2026-09-02", "round": "3차전", "scores": ["0:6"], "cells": [], "images": []},
+      {"date": "2026-09-05", "round": "4차전", "scores": ["0:6"], "cells": [], "images": []}
+    ],
+    "record": {"url": "", "opponent_server": "네몬", "opponent_capture_count": null, "breitra_capture_count": null, "completion": "9월 5일 (4차전)", "matchup": {"round": "4차전", "breitra_result": "LOSE", "opponent_result": "WIN", "breitra_round": 0, "opponent_round": 6, "breitra_total": 1, "opponent_total": 23}}
+  },
+  "바카르마 VS 인드나흐": {
+    "updated_at": "2026-09-07T00:00:00+09:00", "source_url": "",
+    "records": [
+      {"date": "2026-08-26", "round": "1차전", "scores": ["5:1"], "cells": [], "images": []},
+      {"date": "2026-08-29", "round": "2차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-09-02", "round": "3차전", "scores": ["6:0"], "cells": [], "images": []},
+      {"date": "2026-09-05", "round": "4차전", "scores": ["6:0"], "cells": [], "images": []}
+    ],
+    "record": {"url": "", "opponent_server": "인드나흐", "opponent_capture_count": null, "breitra_capture_count": null, "completion": "9월 5일 (4차전)", "matchup": {"round": "4차전", "breitra_result": "WIN", "opponent_result": "LOSE", "breitra_round": 6, "opponent_round": 0, "breitra_total": 20, "opponent_total": 4}}
+  },
+  "챈가룽 VS 오다르": {
+    "updated_at": "2026-09-07T00:00:00+09:00", "source_url": "",
+    "records": [
+      {"date": "2026-08-26", "round": "1차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-08-29", "round": "2차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-09-02", "round": "3차전", "scores": ["1:5"], "cells": [], "images": []},
+      {"date": "2026-09-05", "round": "4차전", "scores": ["2:4"], "cells": [], "images": []}
+    ],
+    "record": {"url": "", "opponent_server": "오다르", "opponent_capture_count": null, "breitra_capture_count": null, "completion": "9월 5일 (4차전)", "matchup": {"round": "4차전", "breitra_result": "LOSE", "opponent_result": "WIN", "breitra_round": 2, "opponent_round": 4, "breitra_total": 9, "opponent_total": 15}}
+  },
+  "티아마트 VS 메스람타에다": {
+    "updated_at": "2026-09-07T00:00:00+09:00", "source_url": "",
+    "records": [
+      {"date": "2026-08-26", "round": "1차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-08-29", "round": "2차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-09-02", "round": "3차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-09-05", "round": "4차전", "scores": ["0:6"], "cells": [], "images": []}
+    ],
+    "record": {"url": "", "opponent_server": "메스람타에다", "opponent_capture_count": null, "breitra_capture_count": null, "completion": "9월 5일 (4차전)", "matchup": {"round": "4차전", "breitra_result": "LOSE", "opponent_result": "WIN", "breitra_round": 0, "opponent_round": 6, "breitra_total": 9, "opponent_total": 15}}
+  },
+  "이스할겐 VS 하달": {
+    "updated_at": "2026-09-07T00:00:00+09:00", "source_url": "",
+    "records": [
+      {"date": "2026-08-26", "round": "1차전", "scores": ["5:1"], "cells": [], "images": []},
+      {"date": "2026-08-29", "round": "2차전", "scores": ["5:1"], "cells": [], "images": []},
+      {"date": "2026-09-02", "round": "3차전", "scores": ["5:1"], "cells": [], "images": []},
+      {"date": "2026-09-05", "round": "4차전", "scores": ["5:1"], "cells": [], "images": []}
+    ],
+    "record": {"url": "", "opponent_server": "하달", "opponent_capture_count": null, "breitra_capture_count": null, "completion": "9월 5일 (4차전)", "matchup": {"round": "4차전", "breitra_result": "WIN", "opponent_result": "LOSE", "breitra_round": 5, "opponent_round": 1, "breitra_total": 20, "opponent_total": 4}}
+  },
+  "포에타 VS 프레기온": {
+    "updated_at": "2026-09-07T00:00:00+09:00", "source_url": "",
+    "records": [
+      {"date": "2026-08-26", "round": "1차전", "scores": ["3:3"], "cells": [], "images": []},
+      {"date": "2026-08-29", "round": "2차전", "scores": ["2:4"], "cells": [], "images": []},
+      {"date": "2026-09-02", "round": "3차전", "scores": ["2:4"], "cells": [], "images": []},
+      {"date": "2026-09-05", "round": "4차전", "scores": ["3:3"], "cells": [], "images": []}
+    ],
+    "record": {"url": "", "opponent_server": "프레기온", "opponent_capture_count": null, "breitra_capture_count": null, "completion": "9월 5일 (4차전)", "matchup": {"round": "4차전", "breitra_result": "DRAW", "opponent_result": "DRAW", "breitra_round": 3, "opponent_round": 3, "breitra_total": 10, "opponent_total": 14}}
+  },
+  "챕터1 - 4차전": {
+    "updated_at": "2026-09-07T00:00:00+09:00",
+    "records": [
+      {"matchup": "시엘 VS 지켈", "score": "12:12"},
+      {"matchup": "네자칸 VS 에레슈키칼", "score": "10:14"},
+      {"matchup": "트리니엘 VS 루미엘", "score": "9:15"},
+      {"matchup": "카이시넬 VS 바이젤", "score": "13:11"},
+      {"matchup": "유스티엘 VS 바바룽", "score": "11:13"},
+      {"matchup": "아스펠 VS 이스라펠", "score": "11:13"},
+      {"matchup": "아리엘 VS 마르쿠탄", "score": "14:10"},
+      {"matchup": "프레기온 VS 포에타", "score": "11:13"},
+      {"matchup": "메스람타에다 VS 오다르", "score": "13:11"},
+      {"matchup": "나니아 VS 네몬", "score": "9:15"},
+      {"matchup": "하달 VS 파프니르", "score": "13:11"},
+      {"matchup": "루드라 VS 크로메데", "score": "18:6"},
+      {"matchup": "타하바타 VS 무닌", "score": "7:17"},
+      {"matchup": "루터스 VS 다미누", "score": "9:9"},
+      {"matchup": "페르노스 VS 히타니에", "score": "15:9"},
+      {"matchup": "젠카카 VS 브리트라", "score": "10:14"},
+      {"matchup": "바카르마 VS 코치룽", "score": "16:8"},
+      {"matchup": "콰이링 VS 울고른", "score": "13:11"},
+      {"matchup": "챈가룽 VS 인드나흐", "score": "12:12"},
+      {"matchup": "이슈타르 VS 이스할겐", "score": "17:7"},
+      {"matchup": "티아마트 VS 카사카", "score": "9:15"}
+    ]
+  },
+  "챕터1 - 3차전": {
+    "updated_at": "2026-09-07T00:00:00+09:00",
+    "records": [
+      {"matchup": "시엘 VS 지켈", "score": "15:9"},
+      {"matchup": "네자칸 VS 에레슈키갈", "score": "12:12"},
+      {"matchup": "바이젤 VS 무닌", "score": "19:5"},
+      {"matchup": "루미엘 VS 이스라펠", "score": "12:12"},
+      {"matchup": "카이시넬 VS 루드라", "score": "16:8"},
+      {"matchup": "유스티엘 VS 크로메데", "score": "15:9"},
+      {"matchup": "아스펠 VS 트리니엘", "score": "14:10"},
+      {"matchup": "아리엘 VS 마르쿠탄", "score": "11:13"},
+      {"matchup": "프레기온 VS 이스할겐", "score": "10:14"},
+      {"matchup": "메스람타에다 VS 바카르마", "score": "7:17"},
+      {"matchup": "챈가룽 VS 인드나흐", "score": "14:10"},
+      {"matchup": "히타니에 VS 오다르", "score": "11:13"},
+      {"matchup": "나니아 VS 젠카카", "score": "14:10"},
+      {"matchup": "하달 VS 파프니르", "score": "14:10"},
+      {"matchup": "페르노스 VS 코치룽", "score": "12:12"},
+      {"matchup": "타하바타 VS 네몬", "score": "6:18"},
+      {"matchup": "루터스 VS 다미누", "score": "13:11"},
+      {"matchup": "바바룽 VS 브리트라", "score": "19:5"},
+      {"matchup": "이슈타르 VS 콰이링", "score": "21:3"},
+      {"matchup": "포에타 VS 카사카", "score": "17:7"},
+      {"matchup": "티아마트 VS 울고른", "score": "13:11"}
+    ]
+  },
+  "챕터1 - 2차전": {
+    "updated_at": "2026-09-07T00:00:00+09:00",
+    "records": [
+      {"matchup": "시엘 VS 마르쿠탄", "score": "16:8"},
+      {"matchup": "지켈 VS 루미엘", "score": "13:11"},
+      {"matchup": "네자칸 VS 아리엘", "score": "8:16"},
+      {"matchup": "바이젤 VS 네몬", "score": "15:9"},
+      {"matchup": "카이시넬 VS 브리트라", "score": "17:7"},
+      {"matchup": "유스티엘 VS 크로메데", "score": "11:13"},
+      {"matchup": "아스펠 VS 이스라펠", "score": "9:15"},
+      {"matchup": "프레기온 VS 젠카카", "score": "10:14"},
+      {"matchup": "에레슈키갈 VS 트리니엘", "score": "11:13"},
+      {"matchup": "메스람타에다 VS 다미누", "score": "14:10"},
+      {"matchup": "히타니에 VS 오다르", "score": "12:12"},
+      {"matchup": "하달 VS 무닌", "score": "8:16"},
+      {"matchup": "나니아 VS 바바룽", "score": "11:13"},
+      {"matchup": "루드라 VS 파프니르", "score": "17:7"},
+      {"matchup": "타하바타 VS 티아마트", "score": "14:10"},
+      {"matchup": "루터스 VS 바카르마", "score": "9:15"},
+      {"matchup": "챈가룽 VS 울고른", "score": "8:16"},
+      {"matchup": "페르노스 VS 코치룽", "score": "9:15"},
+      {"matchup": "이슈타르 VS 카사카", "score": "17:7"},
+      {"matchup": "이스할겐 VS 콰이링", "score": "19:5"},
+      {"matchup": "포에타 VS 인드나흐", "score": "13:11"}
+    ]
+  },
+  "챕터1 - 1차전": {
+    "updated_at": "2026-09-07T00:00:00+09:00",
+    "records": [
+      {"matchup": "시엘 VS 바이젤", "score": "20:4"},
+      {"matchup": "지켈 VS 루미엘", "score": "13:11"},
+      {"matchup": "네자칸 VS 마르쿠탄", "score": "10:14"},
+      {"matchup": "트리니엘 VS 바바룽", "score": "15:9"},
+      {"matchup": "카이시넬 VS 이스라펠", "score": "12:12"},
+      {"matchup": "아리엘 VS 아스펠", "score": "10:14"},
+      {"matchup": "유스티엘 VS 젠카카", "score": "13:11"},
+      {"matchup": "프레기온 VS 파프니르", "score": "13:11"},
+      {"matchup": "나니아 VS 크로메데", "score": "10:14"},
+      {"matchup": "네몬 VS 하달", "score": "13:11"},
+      {"matchup": "메스람타에다 VS 다미누", "score": "13:11"},
+      {"matchup": "루드라 VS 에레슈키갈", "score": "9:15"},
+      {"matchup": "루터스 VS 히타니에", "score": "11:13"},
+      {"matchup": "타하바타 VS 티아마트", "score": "14:10"},
+      {"matchup": "울고른 VS 오다르", "score": "13:11"},
+      {"matchup": "무닌 VS 브리트라", "score": "10:14"},
+      {"matchup": "콰이링 VS 인드나흐", "score": "14:10"},
+      {"matchup": "카사카 VS 이스할겐", "score": "9:15"},
+      {"matchup": "챈가룽 VS 페르노스", "score": "12:12"},
+      {"matchup": "코치룽 VS 바카르마", "score": "10:14"},
+      {"matchup": "이슈타르 VS 포에타", "score": "17:7"}
+    ]
+  }
+}

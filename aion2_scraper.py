@@ -17,6 +17,7 @@
 """
 
 import asyncio
+import re
 from urllib.parse import urlsplit, urlunsplit
 
 from playwright.async_api import async_playwright
@@ -25,6 +26,24 @@ from playwright.async_api import async_playwright
 DUMMY_MODE = False
 
 BASE_URL = "https://aion2.plaync.com"
+ARTIFACT_RESULT_URL = "https://aion2tool.com/server-comparison"
+
+OFFICIAL_BOARD_URLS = {
+    "이벤트": f"{BASE_URL}/ko-kr/eventon",
+    "공지": f"{BASE_URL}/ko-kr/board/notice/list",
+    "업데이트": f"{BASE_URL}/ko-kr/board/update/list",
+    "CM 아지트": f"{BASE_URL}/ko-kr/board/cm_story/list",
+}
+EXCLUDED_OFFICIAL_TITLE_PARTS = (
+    "운영정책 위반 및 임시보호 계정들에 대한 게임 이용제한 안내",
+)
+
+
+def is_excluded_official_article(category: str, title: str) -> bool:
+    """공지 알림에서 제외할 게시글인지 확인합니다."""
+    return category == "공지" and any(
+        excluded_part in title for excluded_part in EXCLUDED_OFFICIAL_TITLE_PARTS
+    )
 
 _playwright = None
 _browser = None
@@ -50,6 +69,223 @@ async def close_browser():
     if _playwright:
         await _playwright.stop()
         _playwright = None
+
+
+async def get_latest_official_articles(limit: int = 10) -> list[dict]:
+    """공식 사이트 네 게시판에서 최신 게시글 목록을 수집합니다."""
+    if DUMMY_MODE:
+        return []
+
+    browser = await _get_browser()
+    page = await browser.new_page()
+    articles = []
+    seen_urls = set()
+    try:
+        for category, list_url in OFFICIAL_BOARD_URLS.items():
+            await page.goto(list_url, wait_until="networkidle", timeout=30000)
+            links = await page.locator("a[href*='/view?articleId=']").evaluate_all(
+                """els => els.map(a => ({href: a.href, text: (a.innerText || '').trim()}))"""
+            )
+            category_count = 0
+            for link in links:
+                url = link["href"]
+                if url in seen_urls:
+                    continue
+                title = re.sub(r"\s+", " ", link["text"]).strip()
+                if not title or is_excluded_official_article(category, title):
+                    continue
+                seen_urls.add(url)
+                articles.append({"category": category, "title": title, "url": url})
+                category_count += 1
+                if category_count >= limit:
+                    break
+        return articles
+    finally:
+        await page.close()
+
+
+async def get_latest_artifact_result(expected_date=None) -> dict | None:
+    """아툴에서 최근 집계 완료된 아티팩트쟁 결과를 가져옵니다."""
+    if DUMMY_MODE:
+        return None
+
+    browser = await _get_browser()
+    page = await browser.new_page()
+    try:
+        await page.goto(ARTIFACT_RESULT_URL, wait_until="domcontentloaded", timeout=30000)
+        body_text = ""
+        for _ in range(15):
+            body_text = re.sub(r"\s+", " ", await page.locator("body").inner_text()).strip()
+            if "결과 집계완료" in body_text:
+                break
+            await page.wait_for_timeout(1000)
+        completed = re.findall(
+            r"✅\s*(\d+월\s*\d+일\s*\(\d+차전\))\s*결과 집계완료", body_text
+        )
+        if not completed:
+            return None
+
+        date_match = re.search(r"(\d+)월\s*(\d+)일", completed[0])
+        if expected_date and date_match:
+            result_month, result_day = map(int, date_match.groups())
+            if (result_month, result_day) != (expected_date.month, expected_date.day):
+                return None
+
+        round_summary = None
+        summary_match = re.search(
+            r"(\d+차전 라운드 요약.*?)(?=📊 한눈에|🏆 서버 점령 순위)",
+            body_text,
+        )
+        if summary_match:
+            round_summary = summary_match.group(1).strip()
+
+        return {
+            "completion": completed[0],
+            "summary": round_summary,
+            "url": ARTIFACT_RESULT_URL,
+        }
+    finally:
+        await page.close()
+
+
+async def get_artifact_server_record(opponent_server: str) -> dict | None:
+    """아툴에서 브리트라와 상대 서버의 아티팩트 전적을 가져옵니다."""
+    if DUMMY_MODE:
+        return None
+
+    browser = await _get_browser()
+    page = await browser.new_page()
+    try:
+        await page.goto(ARTIFACT_RESULT_URL, wait_until="domcontentloaded", timeout=30000)
+        body_text = ""
+        for _ in range(15):
+            body_text = re.sub(r"\s+", " ", await page.locator("body").inner_text()).strip()
+            if "브리트라" in body_text and "누적" in body_text:
+                break
+            await page.wait_for_timeout(1000)
+
+        record = parse_artifact_server_record(body_text, opponent_server)
+        if record is None:
+            return None
+        return record | {"url": ARTIFACT_RESULT_URL}
+    finally:
+        await page.close()
+
+
+async def get_artifact_server_history(opponent_server: str) -> dict | None:
+    """아툴의 해당 서버 매칭 기록보기를 열어 회차별 기록을 가져옵니다."""
+    if DUMMY_MODE:
+        return None
+
+    browser = await _get_browser()
+    page = await browser.new_page()
+    try:
+        await page.goto(ARTIFACT_RESULT_URL, wait_until="domcontentloaded", timeout=30000)
+        for _ in range(15):
+            body_text = await page.locator("body").inner_text()
+            if opponent_server in body_text and "기록 보기" in body_text:
+                break
+            await page.wait_for_timeout(1000)
+
+        record_buttons = page.get_by_text("기록 보기", exact=True)
+        target = None
+        for index in range(await record_buttons.count()):
+            candidate = record_buttons.nth(index)
+            ancestor = candidate
+            for _ in range(8):
+                text = (await ancestor.inner_text()).strip()
+                if "브리트라" in text and opponent_server in text:
+                    target = candidate
+                    break
+                ancestor = ancestor.locator("..")
+            if target:
+                break
+
+        if target is None:
+            return None
+        await target.click()
+        await page.wait_for_timeout(500)
+
+        rows = await page.locator("table tr").evaluate_all(
+            """rows => rows.map(row => ({
+                cells: Array.from(row.cells).map(cell => ({
+                    text: (cell.innerText || '').trim(),
+                    images: Array.from(cell.querySelectorAll('img')).map(img => img.src)
+                }))
+            }))"""
+        )
+        return {
+            "pair": f"브리트라 VS {opponent_server}",
+            "records": parse_artifact_history_rows(rows),
+            "source_url": page.url,
+        }
+    finally:
+        await page.close()
+
+
+def parse_artifact_history_rows(rows: list[dict]) -> list[dict]:
+    """기록보기 표의 행을 JSON 저장용 회차 데이터로 정리합니다."""
+    records = []
+    for row in rows:
+        cells = row.get("cells", [])
+        cell_texts = [re.sub(r"\s+", " ", cell.get("text", "")).strip() for cell in cells]
+        joined = " ".join(cell_texts)
+        date_match = re.search(r"(\d{4}-\d{2}-\d{2})\s*\((\d+차전)\)", joined)
+        if not date_match:
+            continue
+        scores = [value for value in cell_texts if re.fullmatch(r"\d+:\d+", value)]
+        images = [image for cell in cells for image in cell.get("images", [])]
+        records.append(
+            {
+                "date": date_match.group(1),
+                "round": date_match.group(2),
+                "scores": scores,
+                "cells": cell_texts,
+                "images": images,
+            }
+        )
+    return records
+
+
+def parse_artifact_server_record(body_text: str, opponent_server: str) -> dict | None:
+    """렌더링된 아툴 본문에서 브리트라와 상대 서버의 전적을 추출합니다."""
+    server_pattern = r"([가-힣A-Za-z0-9]+)\s+(WIN|LOSE|DRAW)\s+(\d+)\s+(\d+차전)\s+⚔️\s+(\d+)\s+([가-힣A-Za-z0-9]+)\s+(WIN|LOSE|DRAW)\s+누적\s+(\d+):(\d+)"
+    for match in re.finditer(server_pattern, body_text):
+        left_server, left_result, left_round, round_name, right_round, right_server, right_result, left_total, right_total = match.groups()
+        if {left_server, right_server} != {"브리트라", opponent_server}:
+            continue
+        if left_server == "브리트라":
+            breitra_result, opponent_result = left_result, right_result
+            breitra_round, opponent_round = int(left_round), int(right_round)
+            breitra_total, opponent_total = int(left_total), int(right_total)
+        else:
+            breitra_result, opponent_result = right_result, left_result
+            breitra_round, opponent_round = int(right_round), int(left_round)
+            breitra_total, opponent_total = int(right_total), int(left_total)
+
+        def capture_count(server_name: str) -> int | None:
+            count_match = re.search(rf"{re.escape(server_name)}\s+(\d+)회", body_text)
+            return int(count_match.group(1)) if count_match else None
+
+        completion = re.search(
+            r"✅\s*(\d+월\s*\d+일\s*\(\d+차전\))\s*결과 집계완료", body_text
+        )
+        return {
+            "opponent_server": opponent_server,
+            "opponent_capture_count": capture_count(opponent_server),
+            "breitra_capture_count": capture_count("브리트라"),
+            "completion": completion.group(1) if completion else None,
+            "matchup": {
+                "round": round_name,
+                "breitra_result": breitra_result,
+                "opponent_result": opponent_result,
+                "breitra_round": breitra_round,
+                "opponent_round": opponent_round,
+                "breitra_total": breitra_total,
+                "opponent_total": opponent_total,
+            },
+        }
+    return None
 
 
 async def find_comment_by_code(article_url: str, code: str):

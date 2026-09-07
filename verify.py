@@ -318,9 +318,14 @@ class Verify(commands.Cog):
     async def create_panel(
         self,
         interaction: discord.Interaction,
-        title: str = "🛡️ 서버 전용 인증 센터",
-        description: str = "가입 또는 재인증을 위해서 아래의 **인증진행** 버튼을 눌러주세요.",
+        title: str | None = None,
+        description: str | None = None,
     ):
+        target_server = get_guild_config(interaction.guild.id)["target_server"]
+        title = title or f"🛡️ {target_server} 서버 전용 인증 센터"
+        description = description or (
+            f"{target_server} 서버 가입 또는 재인증을 위해서 아래의 **인증진행** 버튼을 눌러주세요."
+        )
         embed = discord.Embed(title=title, description=description, color=discord.Color.blue())
         await interaction.channel.send(embed=embed, view=VerifyPanelView())
         await interaction.response.send_message("✅ 인증 패널을 게시했어요.", ephemeral=True)
