@@ -13,9 +13,10 @@ import verify
 
 logger = logging.getLogger(__name__)
 
-CONFIG_FILE = "guild_config.json"
-ARTIFACT_RECORDS_FILE = "artifact_records.json"
 KST = datetime.timezone(datetime.timedelta(hours=9))
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+CONFIG_FILE = os.path.join(BASE_DIR, "guild_config.json")
+ARTIFACT_RECORDS_FILE = os.path.join(BASE_DIR, "artifact_records.json")
 
 
 ALARM_SCHEDULE = (
@@ -617,10 +618,31 @@ class Automation(commands.Cog):
     async def cog_load(self):
         self.alarm_loop.start()
         self.official_notice_loop.start()
+        self.bot.loop.create_task(self._refresh_admin_panel_messages())
 
     def cog_unload(self):
         self.alarm_loop.cancel()
         self.official_notice_loop.cancel()
+
+    async def _refresh_admin_panel_messages(self):
+        await self.bot.wait_until_ready()
+        for guild in self.bot.guilds:
+            config = get_guild_config(guild.id)
+            channel_id = config.get("admin_panel_channel_id")
+            message_id = config.get("admin_panel_message_id")
+            if not channel_id or not message_id:
+                continue
+            channel = guild.get_channel(channel_id)
+            if not isinstance(channel, discord.TextChannel):
+                continue
+            try:
+                message = await channel.fetch_message(message_id)
+                await message.edit(
+                    embed=build_admin_panel_embed(guild),
+                    view=AdminPanelView(),
+                )
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                logger.warning("관리자 패널 갱신 실패: guild=%s message=%s", guild.id, message_id)
 
     @tasks.loop(minutes=5)
     async def official_notice_loop(self):
@@ -665,7 +687,16 @@ class Automation(commands.Cog):
 
             guild_config["official_seen_articles"] = list(seen_articles)[-100:]
 
-        save_config(config_data)
+        latest_config = load_config()
+        for guild_id, guild_config in config_data.items():
+            latest_config.setdefault(guild_id, {}).update(
+                {
+                    key: value
+                    for key, value in guild_config.items()
+                    if key in {"official_seen_articles", "official_notice_initialized"}
+                }
+            )
+        save_config(latest_config)
 
     @official_notice_loop.before_loop
     async def before_official_notice_loop(self):
@@ -937,10 +968,16 @@ class Automation(commands.Cog):
     @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def create_admin_panel(self, interaction: discord.Interaction):
-        await interaction.channel.send(
+        message = await interaction.channel.send(
             embed=build_admin_panel_embed(interaction.guild),
             view=AdminPanelView(),
         )
+        config = get_guild_config(interaction.guild.id)
+        config["admin_panel_channel_id"] = interaction.channel.id
+        config["admin_panel_message_id"] = message.id
+        data = load_config()
+        data[str(interaction.guild.id)] = config
+        save_config(data)
         await interaction.response.send_message("✅ 관리자 패널을 게시했어요.", ephemeral=True)
 
     @app_commands.command(name="알람메시지설정", description="특정 알람에 표시할 안내 문구를 입력창(모달)으로 설정합니다.")
