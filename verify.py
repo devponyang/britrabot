@@ -313,6 +313,7 @@ class Verify(commands.Cog):
         bot.add_view(VerifyCodeView(DEFAULT_ARTICLE_URL))
 
     @app_commands.command(name="인증패널생성", description="인증 센터 패널(버튼)을 이 채널에 게시합니다.")
+    @app_commands.default_permissions(administrator=True)
     @app_commands.describe(title="패널 제목", description="패널 설명")
     @app_commands.checks.has_permissions(administrator=True)
     async def create_panel(
@@ -331,6 +332,7 @@ class Verify(commands.Cog):
         await interaction.response.send_message("✅ 인증 패널을 게시했어요.", ephemeral=True)
 
     @app_commands.command(name="인증역할설정", description="인증 성공 시 부여할 역할을 설정합니다.")
+    @app_commands.default_permissions(administrator=True)
     @app_commands.describe(role="부여할 역할")
     @app_commands.checks.has_permissions(administrator=True)
     async def set_role(self, interaction: discord.Interaction, role: discord.Role):
@@ -340,6 +342,7 @@ class Verify(commands.Cog):
         )
 
     @app_commands.command(name="인증서버설정", description="인증을 통과시킬 게임 서버 이름을 설정합니다.")
+    @app_commands.default_permissions(administrator=True)
     @app_commands.describe(server_name="게임 내 서버 이름 (예: 브리트라)")
     @app_commands.checks.has_permissions(administrator=True)
     async def set_server(self, interaction: discord.Interaction, server_name: str):
@@ -347,6 +350,7 @@ class Verify(commands.Cog):
         await interaction.response.send_message(f"✅ 인증 대상 서버를 `{server_name}` 으로 설정했어요.")
 
     @app_commands.command(name="인증게시판설정", description="인증 코드를 댓글로 작성할 게시글 URL을 설정합니다.")
+    @app_commands.default_permissions(administrator=True)
     @app_commands.describe(url="게시글 URL")
     @app_commands.checks.has_permissions(administrator=True)
     async def set_article(self, interaction: discord.Interaction, url: str):
