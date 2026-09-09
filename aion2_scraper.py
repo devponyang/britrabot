@@ -181,25 +181,29 @@ async def get_artifact_server_history(opponent_server: str) -> dict | None:
     page = await browser.new_page()
     try:
         await page.goto(ARTIFACT_RESULT_URL, wait_until="domcontentloaded", timeout=30000)
+        body_text = ""
         for _ in range(15):
-            body_text = await page.locator("body").inner_text()
+            body_text = re.sub(r"\s+", " ", await page.locator("body").inner_text()).strip()
             if opponent_server in body_text and "기록 보기" in body_text:
                 break
             await page.wait_for_timeout(1000)
 
+        if parse_artifact_server_record(body_text.replace("브리 트라", "브리트라"), opponent_server) is None:
+            return None
+
         record_buttons = page.get_by_text("기록 보기", exact=True)
         target = None
+        target_text_length = None
         for index in range(await record_buttons.count()):
             candidate = record_buttons.nth(index)
             ancestor = candidate
             for _ in range(8):
                 text = (await ancestor.inner_text()).strip()
                 if "브리트라" in text and opponent_server in text:
-                    target = candidate
-                    break
+                    if target_text_length is None or len(text) < target_text_length:
+                        target = candidate
+                        target_text_length = len(text)
                 ancestor = ancestor.locator("..")
-            if target:
-                break
 
         if target is None:
             return None

@@ -323,9 +323,23 @@ class Verify(commands.Cog):
         description: str | None = None,
     ):
         target_server = get_guild_config(interaction.guild.id)["target_server"]
-        title = title or f"🛡️ {target_server} 서버 전용 인증 센터"
+        title = title or "🛡️ 브리트라 통합 디스코드 인증 센터"
         description = description or (
-            f"{target_server} 서버 가입 또는 재인증을 위해서 아래의 **인증진행** 버튼을 눌러주세요."
+            "여기는 **아이온2 브리트라 서버** 유저라면 누구나 모이는 통합 디스코드예요.\n"
+            "소속 레기온에 상관없이, 브리트라 서버 캐릭터만 있으면 인증 후 자유롭게 이용하실 수 있어요.\n\n"
+            "## 📋 인증 절차\n\n"
+            "**1️⃣** 아래 **[인증진행]** 버튼을 눌러주세요.\n"
+            "**2️⃣** 발급된 인증 코드를 확인하세요. (본인만 볼 수 있어요)\n"
+            "**3️⃣** **[인증게시판으로 이동]** 버튼을 눌러 아이온2 홈페이지 인증게시판으로 이동, 발급받은 코드를 댓글로 남겨주세요.\n"
+            "> ⚠️ 반드시 **브리트라 서버의 대표 캐릭터**로 댓글을 작성해주세요. (다른 서버 캐릭터로는 인증이 통과되지 않아요)\n"
+            "**4️⃣** 댓글 작성 후 **[댓글 작성 완료]** 버튼을 눌러주세요. 봇이 자동으로 확인 후 역할을 부여해드려요.\n\n"
+            "## ❗ 주의사항\n"
+            "- 인증 코드는 **본인만** 사용할 수 있으며, 타인에게 공유하지 마세요.\n"
+            "- 브리트라 서버 캐릭터가 아닐 경우 인증이 통과되지 않아요.\n"
+            "- 댓글을 작성했는데도 인증이 안 된다면, 댓글이 실제로 게시됐는지 새로고침해서 확인 후 다시 시도해주세요.\n"
+            "- 소속 레기온과 무관하게 브리트라 서버 캐릭터면 누구나 인증 가능해요.\n"
+            "- 인증 관련 문제가 있다면 **문의 티켓**을 열어 운영진에게 알려주세요.\n\n"
+            "인증이 완료되면 통합 디스코드의 모든 채널을 이용하실 수 있어요. 잘 부탁드립니다! 🙏"
         )
         embed = discord.Embed(title=title, description=description, color=discord.Color.blue())
         await interaction.channel.send(embed=embed, view=VerifyPanelView())

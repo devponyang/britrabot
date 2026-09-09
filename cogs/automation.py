@@ -17,6 +17,12 @@ KST = datetime.timezone(datetime.timedelta(hours=9))
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_FILE = os.path.join(BASE_DIR, "guild_config.json")
 ARTIFACT_RECORDS_FILE = os.path.join(BASE_DIR, "artifact_records.json")
+OFFICIAL_NOTICE_GUILD_ID = 1545016047332237332
+OFFICIAL_NOTICE_CHANNEL_IDS = {
+    "공지": 1546379509513723905,
+    "이벤트": 1547049610021965854,
+    "기타": 1546894380311519252,
+}
 
 
 ALARM_SCHEDULE = (
@@ -29,6 +35,28 @@ ALARM_SCHEDULE = (
 )
 
 EVENT_NAMES = [name for name, *_ in ALARM_SCHEDULE]
+ALARM_ROLE_GUILD_ID = 1545016047332237332
+ALARM_ROLE_CHANNEL_ID = 1547039122018017300
+ALARM_ROLE_EMOJIS = {
+    "카이라": "🐉",
+    "나흐마": "🦑",
+    "시공쟁탈전": "⏳",
+    "어비스 균열지대": "🌌",
+    "아티팩트쟁": "🏺",
+    "어비스 필드보스": "👹",
+}
+ALARM_ROLE_IDS = {
+    "카이라": 1547034865885646859,
+    "나흐마": 1547034865885646859,
+    "시공쟁탈전": 1547035053677092884,
+    "어비스 균열지대": 1547035121339736094,
+    "아티팩트쟁": 1547035000426332180,
+    "어비스 필드보스": 1547034865885646859,
+}
+
+
+async def get_alarm_role(guild: discord.Guild, event_name: str) -> discord.Role | None:
+    return guild.get_role(ALARM_ROLE_IDS[event_name])
 
 
 def get_due_alarm_messages(now: datetime.datetime) -> list[tuple[str, str]]:
@@ -122,11 +150,14 @@ def save_artifact_history(history: dict):
     if os.path.exists(ARTIFACT_RECORDS_FILE):
         with open(ARTIFACT_RECORDS_FILE, "r", encoding="utf-8") as file:
             data = json.load(file)
-    data[history["pair"]] = {
+    saved_history = {
         "updated_at": datetime.datetime.now(KST).isoformat(),
         "source_url": history["source_url"],
         "records": history["records"],
     }
+    if history.get("record"):
+        saved_history["record"] = history["record"]
+    data[history["pair"]] = saved_history
     with open(ARTIFACT_RECORDS_FILE, "w", encoding="utf-8") as file:
         json.dump(data, file, ensure_ascii=False, indent=2)
 
@@ -291,6 +322,48 @@ class AlarmMessagePanelView(discord.ui.View):
             self.add_item(AlarmMessageButton(name))
 
 
+class AlarmRoleButton(discord.ui.Button):
+    def __init__(self, event_name: str):
+        super().__init__(
+            label=event_name,
+            emoji=ALARM_ROLE_EMOJIS[event_name],
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"alarmrole:{event_name}",
+        )
+        self.event_name = event_name
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.guild is None or interaction.guild.id != ALARM_ROLE_GUILD_ID:
+            await interaction.response.send_message("❌ 이 서버에서는 사용할 수 없는 버튼이에요.", ephemeral=True)
+            return
+
+        role = await get_alarm_role(interaction.guild, self.event_name)
+        if role is None:
+            await interaction.response.send_message(
+                "❌ 알람 역할을 준비하지 못했어요. 봇의 역할 관리 권한을 확인해주세요.",
+                ephemeral=True,
+            )
+            return
+
+        member = interaction.user
+        if role in member.roles:
+            await member.remove_roles(role, reason="알람 역할 해제")
+            message = f"✅ {role.mention} 역할을 해제했어요."
+        else:
+            await member.add_roles(role, reason="알람 역할 선택")
+            message = f"✅ {role.mention} 역할을 받았어요."
+        await interaction.response.send_message(message, ephemeral=True)
+
+
+class AlarmRolePanelView(discord.ui.View):
+    """알람 종류별 멘션 역할을 이모지 버튼으로 선택하는 영구 View"""
+
+    def __init__(self):
+        super().__init__(timeout=None)
+        for event_name in EVENT_NAMES:
+            self.add_item(AlarmRoleButton(event_name))
+
+
 def build_admin_panel_embed(guild: discord.Guild) -> discord.Embed:
     config = get_guild_config(guild.id)
 
@@ -310,7 +383,6 @@ def build_admin_panel_embed(guild: discord.Guild) -> discord.Embed:
         name="알림 채널",
         value=(
             f"게임 일정: {channel_name('alarm_channel')}\n"
-            f"공식 공지: {channel_name('official_notice_channel')}\n"
             f"관리 로그: {channel_name('log_channel')}"
         ),
         inline=False,
@@ -340,7 +412,7 @@ class AdminPanelChannelSelect(discord.ui.ChannelSelect):
             max_values=1,
             channel_types=[discord.ChannelType.text, discord.ChannelType.news],
             custom_id=custom_id,
-            row=0 if setting_key == "alarm_channel" else 1 if setting_key == "official_notice_channel" else 2,
+            row=0 if setting_key == "alarm_channel" else 1,
         )
         self.setting_key = setting_key
         self.label = label
@@ -519,7 +591,6 @@ class AdminPanelView(discord.ui.View):
     def __init__(self):
         super().__init__(timeout=None)
         self.add_item(AdminPanelChannelSelect("alarm_channel", "게임 일정 알림", "adminpanel:alarm_channel"))
-        self.add_item(AdminPanelChannelSelect("official_notice_channel", "공식 공지", "adminpanel:official_notice_channel"))
         self.add_item(AdminPanelChannelSelect("log_channel", "관리 로그", "adminpanel:log_channel"))
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
@@ -612,6 +683,7 @@ class Automation(commands.Cog):
         self.sent_artifact_result_keys: set[tuple[int, str]] = set()
         bot.add_view(TicketView())
         bot.add_view(AlarmMessagePanelView())
+        bot.add_view(AlarmRolePanelView())
         bot.add_view(AdminPanelView())
         bot.add_view(VerificationAdminView())
 
@@ -619,6 +691,8 @@ class Automation(commands.Cog):
         self.alarm_loop.start()
         self.official_notice_loop.start()
         self.bot.loop.create_task(self._refresh_admin_panel_messages())
+        self.bot.loop.create_task(self._ensure_alarm_role_panel())
+        self.bot.loop.create_task(self._sync_artifact_records_when_ready())
 
     def cog_unload(self):
         self.alarm_loop.cancel()
@@ -644,6 +718,65 @@ class Automation(commands.Cog):
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 logger.warning("관리자 패널 갱신 실패: guild=%s message=%s", guild.id, message_id)
 
+    async def _ensure_alarm_role_panel(self):
+        await self.bot.wait_until_ready()
+        guild = self.bot.get_guild(ALARM_ROLE_GUILD_ID)
+        channel = guild.get_channel(ALARM_ROLE_CHANNEL_ID) if guild else None
+        if not isinstance(channel, discord.TextChannel):
+            logger.warning("알람 역할 패널 채널을 찾을 수 없습니다: %s", ALARM_ROLE_CHANNEL_ID)
+            return
+
+        for event_name in EVENT_NAMES:
+            await get_alarm_role(guild, event_name)
+
+        embed = discord.Embed(
+            title="🔔 알람 알림 설정",
+            description=(
+                "받고 싶은 알람의 이모지 버튼을 눌러 역할을 받아주세요.\n"
+                "다시 누르면 해당 알람 역할이 해제됩니다."
+            ),
+            color=discord.Color.gold(),
+        )
+        config = get_guild_config(guild.id)
+        message_id = config.get("alarm_role_panel_message_id")
+        if message_id:
+            try:
+                message = await channel.fetch_message(message_id)
+                await message.edit(embed=embed, view=AlarmRolePanelView())
+                return
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
+
+        try:
+            message = await channel.send(embed=embed, view=AlarmRolePanelView())
+        except (discord.Forbidden, discord.HTTPException):
+            logger.exception("알람 역할 패널 게시 실패: channel=%s", ALARM_ROLE_CHANNEL_ID)
+            return
+        set_guild_config(guild.id, "alarm_role_panel_message_id", message.id)
+
+    async def _sync_artifact_records_when_ready(self):
+        await self.bot.wait_until_ready()
+        await self._sync_artifact_records()
+
+    async def _sync_artifact_records(self):
+        opponents = {
+            config.get("artifact_opponent_server")
+            for guild in self.bot.guilds
+            for config in [get_guild_config(guild.id)]
+            if config.get("artifact_opponent_server")
+        }
+        for opponent_server in opponents:
+            try:
+                history = await aion2_scraper.get_artifact_server_history(opponent_server)
+                if not history or not history.get("records"):
+                    continue
+                record = await aion2_scraper.get_artifact_server_record(opponent_server)
+                if record:
+                    history["record"] = record
+                save_artifact_history(history)
+            except Exception:
+                logger.exception("아티팩트 %s 기록 저장 실패", opponent_server)
+
     @tasks.loop(minutes=5)
     async def official_notice_loop(self):
         try:
@@ -656,12 +789,9 @@ class Automation(commands.Cog):
 
         config_data = load_config()
         for guild in self.bot.guilds:
-            guild_config = config_data.get(str(guild.id), {})
-            channel_id = guild_config.get("official_notice_channel")
-            channel = guild.get_channel(channel_id) if channel_id else None
-            if not isinstance(channel, discord.TextChannel):
+            if guild.id != OFFICIAL_NOTICE_GUILD_ID:
                 continue
-
+            guild_config = config_data.get(str(guild.id), {})
             seen_articles = set(guild_config.get("official_seen_articles", []))
             article_keys = [article["url"] for article in articles]
             if not guild_config.get("official_notice_initialized"):
@@ -671,6 +801,11 @@ class Automation(commands.Cog):
 
             new_articles = [article for article in reversed(articles) if article["url"] not in seen_articles]
             for article in new_articles:
+                category_key = article["category"] if article["category"] in {"공지", "이벤트"} else "기타"
+                channel_id = OFFICIAL_NOTICE_CHANNEL_IDS[category_key]
+                channel = guild.get_channel(channel_id) if channel_id else None
+                if not isinstance(channel, discord.TextChannel):
+                    continue
                 embed = discord.Embed(
                     title=f"📢 {article['category']} 새 글",
                     description=f"**{article['title']}**",
@@ -705,6 +840,7 @@ class Automation(commands.Cog):
     @tasks.loop(seconds=20)
     async def alarm_loop(self):
         now = datetime.datetime.now(KST)
+        await self._check_artifact_result(now)
         due_alarms = get_due_alarm_messages(now)
         if not due_alarms:
             return
@@ -715,9 +851,10 @@ class Automation(commands.Cog):
             if not isinstance(channel, discord.TextChannel):
                 continue
 
-            ping_role_id = get_guild_config(guild.id).get("alarm_ping_role")
-            ping_role = guild.get_role(ping_role_id) if ping_role_id else None
-            custom_messages = get_guild_config(guild.id).get("alarm_messages", {})
+            guild_config = get_guild_config(guild.id)
+            ping_role_id = guild_config.get("alarm_ping_role")
+            default_ping_role = guild.get_role(ping_role_id) if ping_role_id else None
+            custom_messages = guild_config.get("alarm_messages", {})
 
             for schedule_key, alarm_message in due_alarms:
                 alarm_key = (guild.id, schedule_key, now.strftime("%Y-%m-%d %H:%M"))
@@ -728,6 +865,10 @@ class Automation(commands.Cog):
                     embed = build_alarm_embed(
                         alarm_message, schedule_key, custom_messages.get(event_name)
                     )
+                    if guild.id == ALARM_ROLE_GUILD_ID:
+                        ping_role = await get_alarm_role(guild, event_name)
+                    else:
+                        ping_role = default_ping_role
                     content = ping_role.mention if ping_role else None
                     await channel.send(
                         content=content,
@@ -760,9 +901,14 @@ class Automation(commands.Cog):
         if not result:
             return
 
+        await self._sync_artifact_records()
+
         for guild in self.bot.guilds:
             config = get_guild_config(guild.id)
-            channel_id = config.get("official_notice_channel") or config.get("alarm_channel")
+            if guild.id == OFFICIAL_NOTICE_GUILD_ID:
+                channel_id = OFFICIAL_NOTICE_CHANNEL_IDS["기타"]
+            else:
+                channel_id = config.get("alarm_channel")
             channel = guild.get_channel(channel_id) if channel_id else None
             if not isinstance(channel, discord.TextChannel):
                 continue
@@ -795,18 +941,6 @@ class Automation(commands.Cog):
         set_guild_config(interaction.guild.id, "alarm_channel", channel.id)
         await interaction.response.send_message(
             f"✅ 게임 일정 알람 채널을 {channel.mention} 으로 설정했어요."
-        )
-
-    @app_commands.command(name="공지알림채널설정", description="공식 홈페이지 새 글 알림을 보낼 채널을 설정합니다.")
-    @app_commands.default_permissions(administrator=True)
-    @app_commands.describe(channel="공식 홈페이지 새 글 알림을 보낼 채널")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def set_official_notice_channel(
-        self, interaction: discord.Interaction, channel: discord.TextChannel
-    ):
-        set_guild_config(interaction.guild.id, "official_notice_channel", channel.id)
-        await interaction.response.send_message(
-            f"✅ 공식 홈페이지 공지 알림 채널을 {channel.mention} 으로 설정했어요."
         )
 
     @app_commands.command(name="아티설정", description="브리트라의 아티팩트쟁 상대 서버를 설정합니다.")
@@ -1012,23 +1146,6 @@ class Automation(commands.Cog):
         )
         await interaction.channel.send(embed=embed, view=AlarmMessagePanelView())
         await interaction.response.send_message("✅ 알람 문구 설정 패널을 게시했어요.", ephemeral=True)
-
-    @app_commands.command(name="알람핑역할설정", description="게임 일정 알람이 울릴 때 함께 멘션할 역할을 설정합니다.")
-    @app_commands.default_permissions(administrator=True)
-    @app_commands.describe(role="알람 때 멘션할 역할")
-    @app_commands.checks.has_permissions(administrator=True)
-    async def set_alarm_ping_role(self, interaction: discord.Interaction, role: discord.Role):
-        set_guild_config(interaction.guild.id, "alarm_ping_role", role.id)
-        await interaction.response.send_message(
-            f"✅ 알람이 울릴 때 {role.mention} 역할을 함께 멘션하도록 설정했어요."
-        )
-
-    @app_commands.command(name="알람핑해제", description="알람 멘션을 끕니다.")
-    @app_commands.default_permissions(administrator=True)
-    @app_commands.checks.has_permissions(administrator=True)
-    async def clear_alarm_ping_role(self, interaction: discord.Interaction):
-        set_guild_config(interaction.guild.id, "alarm_ping_role", None)
-        await interaction.response.send_message("✅ 알람 멘션을 껐어요.")
 
     @app_commands.command(name="로그채널설정", description="관리 로그(입장/퇴장/삭제 등)를 보낼 채널을 설정합니다.")
     @app_commands.default_permissions(administrator=True)
