@@ -311,7 +311,11 @@ async def find_comment_by_code(article_url: str, code: str):
     browser = await _get_browser()
     page = await browser.new_page()
     try:
-        await page.goto(article_url, wait_until="networkidle", timeout=15000)
+        await page.goto(article_url, wait_until="domcontentloaded", timeout=30000)
+        try:
+            await page.locator("div.comment-article").first.wait_for(timeout=15000)
+        except Exception:
+            return None
 
         comment_articles = await page.query_selector_all("div.comment-article")
         for comment in comment_articles:
@@ -361,11 +365,15 @@ async def get_character_info(profile_url: str):
             (parsed_url.scheme, parsed_url.netloc, detail_path, parsed_url.query, "")
         )
 
-        await page.goto(profile_url, wait_until="networkidle", timeout=15000)
+        await page.goto(profile_url, wait_until="domcontentloaded", timeout=30000)
+        try:
+            await page.locator(".classcard").wait_for(timeout=15000)
+        except Exception:
+            pass
         class_el = await page.query_selector(".classcard")
         class_name = (await class_el.inner_text()).strip() if class_el else None
 
-        await page.goto(detail_url, wait_until="networkidle", timeout=15000)
+        await page.goto(detail_url, wait_until="domcontentloaded", timeout=30000)
 
         desc = page.locator(".profile__info-desc")
         try:

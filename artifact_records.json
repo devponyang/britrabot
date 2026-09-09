@@ -250,6 +250,32 @@
     ],
     "record": {"url": "", "opponent_server": "프레기온", "opponent_capture_count": null, "breitra_capture_count": null, "completion": "9월 5일 (4차전)", "matchup": {"round": "4차전", "breitra_result": "DRAW", "opponent_result": "DRAW", "breitra_round": 3, "opponent_round": 3, "breitra_total": 10, "opponent_total": 14}}
   },
+  "챕터1 - 5차전": {
+    "updated_at": "2026-09-09T00:00:00+09:00",
+    "records": [
+      {"matchup": "시엘 VS 이스라펠", "score": "11:13"},
+      {"matchup": "지켈 VS 아스펠", "score": "17:7"},
+      {"matchup": "바이젤 VS 에레슈키갈", "score": "10:14"},
+      {"matchup": "카이시넬 VS 네자칸", "score": "16:8"},
+      {"matchup": "마르쿠탄 VS 트리니엘", "score": "10:14"},
+      {"matchup": "유스티엘 VS 바바룽", "score": "10:14"},
+      {"matchup": "아리엘 VS 루미엘", "score": "9:15"},
+      {"matchup": "히타니에 VS 다미누", "score": "11:13"},
+      {"matchup": "나니아 VS 이슈타르", "score": "2:22"},
+      {"matchup": "루드라 VS 브리트라", "score": "15:9"},
+      {"matchup": "타하바타 VS 파프니르", "score": "12:12"},
+      {"matchup": "루터스 VS 코치룽", "score": "4:20"},
+      {"matchup": "페르노스 VS 울고른", "score": "10:14"},
+      {"matchup": "젠카카 VS 무닌", "score": "10:14"},
+      {"matchup": "카사카 VS 콰이링", "score": "19:5"},
+      {"matchup": "크로메데 VS 네몬", "score": "1:23"},
+      {"matchup": "바카르마 VS 인드나흐", "score": "20:4"},
+      {"matchup": "챈가룽 VS 오다르", "score": "9:15"},
+      {"matchup": "티아마트 VS 메스람타에다", "score": "9:15"},
+      {"matchup": "이스할겐 VS 하달", "score": "20:4"},
+      {"matchup": "포에타 VS 프레기온", "score": "10:14"}
+    ]
+  },
   "챕터1 - 4차전": {
     "updated_at": "2026-09-07T00:00:00+09:00",
     "records": [
