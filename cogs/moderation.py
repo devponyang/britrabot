@@ -11,6 +11,7 @@ class Moderation(commands.Cog):
 
     # ---------- 메시지 대량 삭제 ----------
     @app_commands.command(name="메시지삭제", description="최근 메시지를 지정한 개수만큼 삭제합니다.")
+    @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)
     @app_commands.describe(amount="삭제할 메시지 개수(1~100)")
     @app_commands.checks.has_permissions(administrator=True)

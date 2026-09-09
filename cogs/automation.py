@@ -936,6 +936,7 @@ class Automation(commands.Cog):
 
     # ---------- 설정 명령어 ----------
     @app_commands.command(name="알람채널설정", description="게임 일정 알람을 보낼 채널을 설정합니다.")
+    @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)
     @app_commands.describe(channel="게임 일정 알람을 보낼 채널")
     @app_commands.checks.has_permissions(administrator=True)
@@ -946,6 +947,7 @@ class Automation(commands.Cog):
         )
 
     @app_commands.command(name="아티설정", description="브리트라의 아티팩트쟁 상대 서버를 설정합니다.")
+    @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)
     @app_commands.describe(server="브리트라의 상대 서버 이름")
     @app_commands.checks.has_permissions(administrator=True)
@@ -962,6 +964,7 @@ class Automation(commands.Cog):
         )
 
     @app_commands.command(name="아티확인", description="브리트라와 설정한 상대 서버의 아티팩트 전적을 확인합니다.")
+    @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)
     async def check_artifact_record(self, interaction: discord.Interaction):
         opponent_server = get_guild_config(interaction.guild.id).get("artifact_opponent_server")
@@ -1101,6 +1104,7 @@ class Automation(commands.Cog):
         await interaction.followup.send(embed=embed)
 
     @app_commands.command(name="관리자패널", description="버튼으로 봇 설정을 관리하는 패널을 게시합니다.")
+    @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def create_admin_panel(self, interaction: discord.Interaction):
@@ -1117,6 +1121,7 @@ class Automation(commands.Cog):
         await interaction.response.send_message("✅ 관리자 패널을 게시했어요.", ephemeral=True)
 
     @app_commands.command(name="알람메시지설정", description="특정 알람에 표시할 안내 문구를 입력창(모달)으로 설정합니다.")
+    @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)
     @app_commands.describe(event="문구를 설정할 알람 종류")
     @app_commands.choices(
@@ -1138,6 +1143,7 @@ class Automation(commands.Cog):
     @app_commands.command(
         name="알람메시지설정패널", description="버튼을 눌러 알람 문구를 설정할 수 있는 패널을 게시합니다."
     )
+    @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def create_alarm_message_panel(self, interaction: discord.Interaction):
@@ -1150,6 +1156,7 @@ class Automation(commands.Cog):
         await interaction.response.send_message("✅ 알람 문구 설정 패널을 게시했어요.", ephemeral=True)
 
     @app_commands.command(name="로그채널설정", description="관리 로그(입장/퇴장/삭제 등)를 보낼 채널을 설정합니다.")
+    @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)
     @app_commands.describe(channel="로그를 보낼 채널")
     @app_commands.checks.has_permissions(administrator=True)
@@ -1158,6 +1165,7 @@ class Automation(commands.Cog):
         await interaction.response.send_message(f"✅ 로그 채널을 {channel.mention} 으로 설정했어요.")
 
     @app_commands.command(name="티켓패널생성", description="누구나 티켓을 열 수 있는 버튼 패널을 게시합니다.")
+    @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
     async def create_ticket_panel(self, interaction: discord.Interaction):
