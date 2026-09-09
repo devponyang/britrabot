@@ -37,22 +37,19 @@ ALARM_SCHEDULE = (
 EVENT_NAMES = [name for name, *_ in ALARM_SCHEDULE]
 ALARM_ROLE_GUILD_ID = 1545016047332237332
 ALARM_ROLE_CHANNEL_ID = 1547039122018017300
-ALARM_ROLE_EMOJIS = {
-    "카이라": "🐉",
-    "나흐마": "🦑",
-    "시공쟁탈전": "⏳",
-    "어비스 균열지대": "🌌",
-    "아티팩트쟁": "🏺",
-    "어비스 필드보스": "👹",
-}
 ALARM_ROLE_IDS = {
     "카이라": 1547034865885646859,
     "나흐마": 1547034865885646859,
     "시공쟁탈전": 1547035053677092884,
     "어비스 균열지대": 1547035121339736094,
-    "아티팩트쟁": 1547035000426332180,
+    "아티팩트쟁": 1547035121339736094,
     "어비스 필드보스": 1547034865885646859,
 }
+ALARM_ROLE_GROUPS = (
+    ("필드보스", "🐉", "어비스 필드보스"),
+    ("시공", "⏳", "시공쟁탈전"),
+    ("어비스", "🌌", "어비스 균열지대"),
+)
 
 
 async def get_alarm_role(guild: discord.Guild, event_name: str) -> discord.Role | None:
@@ -323,21 +320,22 @@ class AlarmMessagePanelView(discord.ui.View):
 
 
 class AlarmRoleButton(discord.ui.Button):
-    def __init__(self, event_name: str):
+    def __init__(self, group_name: str, emoji: str, role_event_name: str):
         super().__init__(
-            label=event_name,
-            emoji=ALARM_ROLE_EMOJIS[event_name],
+            label=group_name,
+            emoji=emoji,
             style=discord.ButtonStyle.secondary,
-            custom_id=f"alarmrole:{event_name}",
+            custom_id=f"alarmrole:{group_name}",
         )
-        self.event_name = event_name
+        self.group_name = group_name
+        self.role_event_name = role_event_name
 
     async def callback(self, interaction: discord.Interaction):
         if interaction.guild is None or interaction.guild.id != ALARM_ROLE_GUILD_ID:
             await interaction.response.send_message("❌ 이 서버에서는 사용할 수 없는 버튼이에요.", ephemeral=True)
             return
 
-        role = await get_alarm_role(interaction.guild, self.event_name)
+        role = await get_alarm_role(interaction.guild, self.role_event_name)
         if role is None:
             await interaction.response.send_message(
                 "❌ 알람 역할을 준비하지 못했어요. 봇의 역할 관리 권한을 확인해주세요.",
@@ -360,8 +358,8 @@ class AlarmRolePanelView(discord.ui.View):
 
     def __init__(self):
         super().__init__(timeout=None)
-        for event_name in EVENT_NAMES:
-            self.add_item(AlarmRoleButton(event_name))
+        for group_name, emoji, role_event_name in ALARM_ROLE_GROUPS:
+            self.add_item(AlarmRoleButton(group_name, emoji, role_event_name))
 
 
 def build_admin_panel_embed(guild: discord.Guild) -> discord.Embed:
@@ -732,8 +730,12 @@ class Automation(commands.Cog):
         embed = discord.Embed(
             title="🔔 알람 알림 설정",
             description=(
-                "받고 싶은 알람의 이모지 버튼을 눌러 역할을 받아주세요.\n"
-                "다시 누르면 해당 알람 역할이 해제됩니다."
+                "원하는 보스/이벤트 알람만 골라서 받을 수 있어요.\n"
+                "받고 싶은 알람의 버튼을 누르면 해당 역할이 부여되고, 이후 그 알람이 뜰 때 **#알람-채널**에서 멘션(핑)을 받아요.\n\n"
+                "- ✅ 버튼을 누르면 → 역할 부여 (알림 받기 시작)\n"
+                "- ❌ 같은 버튼을 다시 누르면 → 역할 해제 (알림 그만 받기)\n"
+                "- 여러 개 동시에 선택 가능해요. 필요한 것만 골라서 받으세요!\n\n"
+                "> 💡 너무 많은 알림이 부담스러우면 자주 참여하는 것만 골라주세요."
             ),
             color=discord.Color.gold(),
         )
@@ -1161,7 +1163,14 @@ class Automation(commands.Cog):
     async def create_ticket_panel(self, interaction: discord.Interaction):
         embed = discord.Embed(
             title="🎫 문의 티켓",
-            description="관리자와 상담하려면 아래 버튼을 눌러주세요. 본인과 관리자만 볼 수 있는 채널이 생성됩니다.",
+            description=(
+                "버그 제보, 인증 문제, 개인적인 신고나 상담이 필요하면 아래 버튼을 눌러주세요.\n"
+                "버튼을 누르면 **본인과 운영진만 볼 수 있는 전용 채널**이 자동으로 생성돼요.\n\n"
+                "- 🐛 게임 버그, 인증 오류 신고\n"
+                "- 🙋 개인적인 문의나 상담\n"
+                "- 🚨 다른 멤버 신고 (증거가 있다면 함께 첨부해주세요)\n\n"
+                "> 💬 일반적인 질문이나 잡담은 채팅 채널을 이용해주세요. 문의가 끝나면 채널은 정리될 수 있어요."
+            ),
             color=discord.Color.blurple(),
         )
         await interaction.channel.send(embed=embed, view=TicketView())

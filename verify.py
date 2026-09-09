@@ -4,6 +4,7 @@ import random
 import string
 import datetime
 import time
+import re
 
 import discord
 from discord import app_commands
@@ -133,6 +134,7 @@ class VerifyPanelView(discord.ui.View):
 
     def __init__(self):
         super().__init__(timeout=None)
+        self.add_item(VerifyTicketButton())
 
     @discord.ui.button(
         label="인증진행", style=discord.ButtonStyle.success, custom_id="verify:start"
@@ -163,6 +165,63 @@ class VerifyPanelView(discord.ui.View):
 
         await interaction.response.send_message(
             embed=embed, view=VerifyCodeView(config["article_url"]), ephemeral=True
+        )
+
+
+class VerifyTicketButton(discord.ui.Button):
+    def __init__(self):
+        super().__init__(
+            label="문의 티켓",
+            style=discord.ButtonStyle.primary,
+            emoji="🎫",
+            custom_id="ticket:verify_open",
+        )
+
+    async def callback(self, interaction: discord.Interaction):
+        guild = interaction.guild
+        topic = f"티켓 대상: {interaction.user.id}"
+        existing = next(
+            (channel for channel in guild.text_channels if channel.topic == topic), None
+        )
+        if existing:
+            await interaction.response.send_message(
+                f"이미 열려 있는 티켓이 있어요: {existing.mention}", ephemeral=True
+            )
+            return
+
+        await interaction.response.defer(ephemeral=True)
+        safe_name = re.sub(r"[^0-9A-Za-z가-힣_-]", "-", interaction.user.display_name).strip("-")
+        channel_name = f"티켓-{safe_name or interaction.user.id}"[:100]
+        overwrites = {
+            guild.default_role: discord.PermissionOverwrite(view_channel=False),
+            interaction.user: discord.PermissionOverwrite(
+                view_channel=True, send_messages=True, read_message_history=True
+            ),
+            guild.me: discord.PermissionOverwrite(
+                view_channel=True,
+                send_messages=True,
+                read_message_history=True,
+                manage_channels=True,
+                manage_messages=True,
+            ),
+        }
+        try:
+            channel = await guild.create_text_channel(
+                channel_name,
+                overwrites=overwrites,
+                topic=topic,
+                reason=f"{interaction.user}가 인증 패널에서 티켓 생성",
+            )
+            await channel.send(
+                f"{interaction.user.mention} 님의 티켓이 생성됐어요. 운영진에게 문의 내용을 남겨주세요."
+            )
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "❌ 봇에게 채널 관리 권한이 없어 티켓을 만들 수 없어요.", ephemeral=True
+            )
+            return
+        await interaction.followup.send(
+            f"✅ 티켓 채널 {channel.mention}을 생성했어요.", ephemeral=True
         )
 
 
