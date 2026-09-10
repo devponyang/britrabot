@@ -155,14 +155,15 @@ class VerifyPanelView(discord.ui.View):
         label="인증진행", style=discord.ButtonStyle.success, custom_id="verify:start"
     )
     async def start_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
         pending = get_pending_code(interaction.user.id)
         if pending and pending.get("verified"):
-            return await interaction.response.send_message(
+            return await interaction.followup.send(
                 "✅ 이미 인증된 사용자예요.", ephemeral=True
             )
         cooldown = get_cooldown_remaining(interaction.user.id)
         if cooldown:
-            return await interaction.response.send_message(
+            return await interaction.followup.send(
                 f"⚠️ 인증 실패 횟수를 초과했어요. {max(1, (cooldown + 59) // 60)}분 후 다시 시도해주세요.",
                 ephemeral=True,
             )
@@ -178,7 +179,7 @@ class VerifyPanelView(discord.ui.View):
         )
         embed.add_field(name="🔑 발급된 인증 코드", value=f"`{code}`", inline=False)
 
-        await interaction.response.send_message(
+        await interaction.followup.send(
             embed=embed, view=VerifyCodeView(config["article_url"]), ephemeral=True
         )
 
@@ -300,24 +301,23 @@ class VerifyCodeView(discord.ui.View):
         custom_id="verify:check",
     )
     async def check_button(self, interaction: discord.Interaction, button: discord.ui.Button):
+        await interaction.response.defer(ephemeral=True)
         pending = get_pending_code(interaction.user.id)
         if not pending:
-            return await interaction.response.send_message(
+            return await interaction.followup.send(
                 "❌ 발급된 인증 코드가 없어요. 먼저 **인증진행** 버튼을 눌러주세요.",
                 ephemeral=True,
             )
         if pending.get("verified"):
-            return await interaction.response.send_message(
+            return await interaction.followup.send(
                 "✅ 이미 인증된 사용자예요.", ephemeral=True
             )
         cooldown = get_cooldown_remaining(interaction.user.id)
         if cooldown:
-            return await interaction.response.send_message(
+            return await interaction.followup.send(
                 f"⚠️ 잠시 후 다시 시도해주세요. 남은 시간: {max(1, (cooldown + 59) // 60)}분",
                 ephemeral=True,
             )
-
-        await interaction.response.defer(ephemeral=True)
 
         config = get_guild_config(pending["guild_id"])
         code = pending["code"]
