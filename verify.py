@@ -38,6 +38,7 @@ ALARM_ROLE_GROUPS = (
     ("시공", "⏳", "시공쟁탈전"),
     ("어비스", "🌌", "어비스 균열지대"),
 )
+ACTIVE_VERIFY_MESSAGES: dict[tuple[int, int], discord.WebhookMessage] = {}
 
 
 # ---------------- 저장소 헬퍼 ----------------
@@ -167,8 +168,10 @@ class VerifyPanelView(discord.ui.View):
                 f"⚠️ 인증 실패 횟수를 초과했어요. {max(1, (cooldown + 59) // 60)}분 후 다시 시도해주세요.",
                 ephemeral=True,
             )
-        code = generate_code()
-        save_pending_code(interaction.user.id, interaction.guild.id, code)
+        code = pending.get("code") if pending else None
+        if not code:
+            code = generate_code()
+            save_pending_code(interaction.user.id, interaction.guild.id, code)
         config = get_guild_config(interaction.guild.id)
 
         embed = discord.Embed(title="디스코드 인증 요청", color=discord.Color.blurple())
@@ -179,9 +182,20 @@ class VerifyPanelView(discord.ui.View):
         )
         embed.add_field(name="🔑 발급된 인증 코드", value=f"`{code}`", inline=False)
 
-        await interaction.followup.send(
-            embed=embed, view=VerifyCodeView(config["article_url"]), ephemeral=True
+        message_key = (interaction.guild.id, interaction.user.id)
+        message_view = VerifyCodeView(config["article_url"])
+        previous_message = ACTIVE_VERIFY_MESSAGES.get(message_key)
+        if previous_message:
+            try:
+                await previous_message.edit(embed=embed, view=message_view)
+                return
+            except (discord.NotFound, discord.HTTPException):
+                ACTIVE_VERIFY_MESSAGES.pop(message_key, None)
+
+        message = await interaction.followup.send(
+            embed=embed, view=message_view, ephemeral=True, wait=True
         )
+        ACTIVE_VERIFY_MESSAGES[message_key] = message
 
 
 class VerifyTicketButton(discord.ui.Button):
