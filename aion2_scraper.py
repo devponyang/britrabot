@@ -131,17 +131,16 @@ async def get_latest_artifact_result(expected_date=None) -> dict | None:
             if (result_month, result_day) != (expected_date.month, expected_date.day):
                 return None
 
-        round_summary = None
-        summary_match = re.search(
-            r"(\d+차전 라운드 요약.*?)(?=📊 한눈에|🏆 서버 점령 순위)",
-            body_text,
+        breitra_record = parse_breitra_artifact_result(body_text)
+        if breitra_record is None:
+            return None
+        breitra_record["territories"] = await get_breitra_territory_results(
+            page, breitra_record["left_server"], breitra_record["right_server"]
         )
-        if summary_match:
-            round_summary = summary_match.group(1).strip()
 
         return {
             "completion": completed[0],
-            "summary": round_summary,
+            "record": breitra_record,
             "url": ARTIFACT_RESULT_URL,
         }
     finally:
@@ -292,6 +291,101 @@ def parse_artifact_server_record(body_text: str, opponent_server: str) -> dict |
     return None
 
 
+def parse_breitra_artifact_result(body_text: str) -> dict | None:
+    """렌더링된 아툴 결과에서 브리트라가 포함된 최신 전적을 추출합니다."""
+    normalized_text = body_text.replace("브리 트라", "브리트라")
+    server_pattern = r"([가-힣A-Za-z0-9]+)\s+(WIN|LOSE|DRAW)\s+(\d+)\s+(\d+차전)\s+⚔️\s+(\d+)\s+([가-힣A-Za-z0-9]+)\s+(WIN|LOSE|DRAW)\s+누적\s+(\d+):(\d+)"
+    match = next(
+        (
+            match
+            for match in re.finditer(server_pattern, normalized_text)
+            if "브리트라" in {match.group(1), match.group(6)}
+        ),
+        None,
+    )
+    if match is None:
+        return None
+
+    (
+        left_server,
+        left_result,
+        left_round,
+        round_name,
+        right_round,
+        right_server,
+        right_result,
+        left_total,
+        right_total,
+    ) = match.groups()
+    if left_server == "브리트라":
+        breitra_result, opponent_result = left_result, right_result
+        breitra_round, opponent_round = int(left_round), int(right_round)
+        breitra_total, opponent_total = int(left_total), int(right_total)
+        opponent_server = right_server
+    else:
+        breitra_result, opponent_result = right_result, left_result
+        breitra_round, opponent_round = int(right_round), int(left_round)
+        breitra_total, opponent_total = int(right_total), int(left_total)
+        opponent_server = left_server
+
+    return {
+        "opponent_server": opponent_server,
+        "left_server": left_server,
+        "right_server": right_server,
+        "breitra_result": breitra_result,
+        "opponent_result": opponent_result,
+        "breitra_round": breitra_round,
+        "opponent_round": opponent_round,
+        "round": round_name,
+        "breitra_total": breitra_total,
+        "opponent_total": opponent_total,
+    }
+
+
+async def get_breitra_territory_results(page, left_server: str, right_server: str) -> list[dict]:
+    """브리트라 전적 카드에서 종족 아이콘으로 지역별 점령 서버를 추출합니다."""
+    rows = await page.evaluate(
+        """([leftServer, rightServer]) => {
+            const normalize = value => (value || '').replace(/\\s+/g, '');
+            return Array.from(document.querySelectorAll('.artifact-layers-row'))
+                .flatMap(row => {
+                    let card = row;
+                    for (let index = 0; index < 10 && card; index += 1, card = card.parentElement) {
+                        const text = normalize(card.innerText);
+                        if (text.includes(normalize(leftServer)) &&
+                            text.includes(normalize(rightServer)) &&
+                            text.includes('결과집계완료')) {
+                            const layer = row.querySelector('.artifact-layer-label');
+                            return [{
+                                layer: (layer?.innerText || '').trim(),
+                                items: Array.from(row.querySelectorAll('.artifact-icon-item')).map(item => {
+                                    const image = item.querySelector('img');
+                                    const name = item.querySelector('.artifact-name');
+                                    return {
+                                        race: image?.alt || '',
+                                        name: (name?.getAttribute('title') || name?.innerText || '').trim()
+                                    };
+                                })
+                            }];
+                        }
+                    }
+                    return [];
+                });
+        }""",
+        [left_server, right_server],
+    )
+    race_to_server = {"천족": left_server, "마족": right_server}
+    results = []
+    for row in rows:
+        for item in row.get("items", []):
+            server = race_to_server.get(item.get("race"))
+            if server and item.get("name"):
+                results.append(
+                    {"layer": row.get("layer", ""), "name": item["name"], "server": server}
+                )
+    return results
+
+
 async def find_comment_by_code(article_url: str, code: str):
     """
     인증 게시글의 댓글 목록에서 `code`가 포함된 댓글을 찾아
@@ -344,7 +438,7 @@ async def get_character_info(profile_url: str):
     댓글 작성자의 프로필 페이지(profile_url)를 렌더링해서
     닉네임/서버/종족/레기온을 반환합니다.
 
-    찾으면: {"nickname": "...", "server": "...", "race": "...", "legion": "..."}
+    찾으면: {"nickname": "...", "server": "...", "race": "...", "legion": "...", "power_level": 450}
     못 찾으면: None
     """
     if DUMMY_MODE:
@@ -353,6 +447,7 @@ async def get_character_info(profile_url: str):
             "server": "브리트라",
             "race": "마족",
             "legion": "더미레기온",
+            "power_level": 450,
         }
 
     browser = await _get_browser()
@@ -413,6 +508,14 @@ async def get_character_info(profile_url: str):
             desc_handle,
         )
 
+        power_level_el = await page.query_selector(".profile__info-power-level")
+        power_level = None
+        if power_level_el:
+            power_level_text = (await power_level_el.inner_text()).strip()
+            power_level_match = re.search(r"\d[\d,]*", power_level_text)
+            if power_level_match:
+                power_level = int(power_level_match.group().replace(",", ""))
+
         if not server:
             return None
 
@@ -422,6 +525,7 @@ async def get_character_info(profile_url: str):
             "server": server,
             "race": race,
             "legion": legion or "없음",
+            "power_level": power_level,
         }
     finally:
         await page.close()

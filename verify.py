@@ -23,6 +23,21 @@ DEFAULT_TARGET_SERVER = "브리트라"
 AUTOMATION_CONFIG_FILE = "guild_config.json"
 MAX_VERIFY_ATTEMPTS = 3
 VERIFY_COOLDOWN_SECONDS = 10 * 60
+MIN_POWER_LEVEL = 450
+ALARM_ROLE_GUILD_ID = 1545016047332237332
+ALARM_ROLE_IDS = {
+    "카이라": 1547034865885646859,
+    "나흐마": 1547034865885646859,
+    "시공쟁탈전": 1547035053677092884,
+    "어비스 균열지대": 1547035121339736094,
+    "아티팩트쟁": 1547035121339736094,
+    "어비스 필드보스": 1547034865885646859,
+}
+ALARM_ROLE_GROUPS = (
+    ("필드보스", "🐉", "어비스 필드보스"),
+    ("시공", "⏳", "시공쟁탈전"),
+    ("어비스", "🌌", "어비스 균열지대"),
+)
 
 
 # ---------------- 저장소 헬퍼 ----------------
@@ -225,6 +240,47 @@ class VerifyTicketButton(discord.ui.Button):
         )
 
 
+class VerificationAlarmRoleButton(discord.ui.Button):
+    def __init__(self, group_name: str, emoji: str, role_event_name: str):
+        super().__init__(
+            label=group_name,
+            emoji=emoji,
+            style=discord.ButtonStyle.secondary,
+            custom_id=f"verify:alarmrole:{group_name}",
+        )
+        self.role_event_name = role_event_name
+
+    async def callback(self, interaction: discord.Interaction):
+        if interaction.guild is None or interaction.guild.id != ALARM_ROLE_GUILD_ID:
+            await interaction.response.send_message(
+                "❌ 이 서버에서는 사용할 수 없는 버튼이에요.", ephemeral=True
+            )
+            return
+
+        role = interaction.guild.get_role(ALARM_ROLE_IDS[self.role_event_name])
+        if role is None:
+            await interaction.response.send_message(
+                "❌ 알람 역할을 준비하지 못했어요. 봇의 역할 설정을 확인해주세요.",
+                ephemeral=True,
+            )
+            return
+
+        if role in interaction.user.roles:
+            await interaction.user.remove_roles(role, reason="알람 역할 해제")
+            message = f"✅ {role.mention} 역할을 해제했어요."
+        else:
+            await interaction.user.add_roles(role, reason="알람 역할 선택")
+            message = f"✅ {role.mention} 역할을 받았어요."
+        await interaction.response.send_message(message, ephemeral=True)
+
+
+class VerificationAlarmRoleView(discord.ui.View):
+    def __init__(self):
+        super().__init__(timeout=None)
+        for group_name, emoji, role_event_name in ALARM_ROLE_GROUPS:
+            self.add_item(VerificationAlarmRoleButton(group_name, emoji, role_event_name))
+
+
 class VerifyCodeView(discord.ui.View):
     """코드 발급 후 보여주는 '인증게시판으로 이동' + '댓글 작성 완료' 버튼 (영구 View)"""
 
@@ -312,6 +368,16 @@ class VerifyCodeView(discord.ui.View):
                 "인증 대상 서버와 불일치",
             )
 
+        power_level = char_info.get("power_level")
+        if power_level is None or power_level < MIN_POWER_LEVEL:
+            displayed_power_level = power_level if power_level is not None else "확인 불가"
+            return await send_verification_failure(
+                interaction,
+                f"❌ `{char_info['nickname']}` 님의 전투력이 **{displayed_power_level}**이라 "
+                f"인증 기준({MIN_POWER_LEVEL} 이상)을 충족하지 못했어요.",
+                "전투력 기준 미달 또는 확인 불가",
+            )
+
         # ---- 인증 성공: 역할 부여 ----
         role = None
         if config["role_id"]:
@@ -350,6 +416,7 @@ class VerifyCodeView(discord.ui.View):
         embed.add_field(name="서버", value=char_info["server"], inline=True)
         embed.add_field(name="종족", value=char_info.get("race", "없음"), inline=True)
         embed.add_field(name="레기온", value=char_info.get("legion", "없음"), inline=True)
+        embed.add_field(name="전투력", value=f"{char_info['power_level']:,}", inline=True)
         status_messages = []
         if role:
             status_messages.append(f"{role.mention} 역할이 부여됐어요.")
@@ -359,6 +426,20 @@ class VerifyCodeView(discord.ui.View):
             status_messages.append("⚠️ 닉네임 변경 권한이 없어 디스코드 닉네임은 변경하지 못했어요.")
         embed.description = "\n".join(status_messages)
         await interaction.followup.send(embed=embed, ephemeral=True)
+
+        alarm_embed = discord.Embed(
+            title="🔔 알람 설정",
+            description=(
+                "원하는 보스/이벤트 알람만 선택해서 받을 수 있어요.\n"
+                "버튼을 누르면 해당 알람 역할이 부여되거나 해제돼요."
+            ),
+            color=discord.Color.gold(),
+        )
+        await interaction.followup.send(
+            embed=alarm_embed,
+            view=VerificationAlarmRoleView(),
+            ephemeral=True,
+        )
 
 
 # ---------------- Cog ----------------
@@ -386,18 +467,18 @@ class Verify(commands.Cog):
         title = title or "🛡️ 브리트라 통합 디스코드 인증 센터"
         description = description or (
             "여기는 **아이온2 브리트라 서버** 유저라면 누구나 모이는 통합 디스코드예요.\n"
-            "소속 레기온에 상관없이, 브리트라 서버 캐릭터만 있으면 인증 후 자유롭게 이용하실 수 있어요.\n\n"
+            "소속 레기온에 상관없이, 브리트라 서버의 전투력 450 이상 캐릭터라면 인증 후 자유롭게 이용하실 수 있어요.\n\n"
             "## 📋 인증 절차\n\n"
             "**1️⃣** 아래 **[인증진행]** 버튼을 눌러주세요.\n"
             "**2️⃣** 발급된 인증 코드를 확인하세요. (본인만 볼 수 있어요)\n"
             "**3️⃣** **[인증게시판으로 이동]** 버튼을 눌러 아이온2 홈페이지 인증게시판으로 이동, 발급받은 코드를 댓글로 남겨주세요.\n"
-            "> ⚠️ 반드시 **브리트라 서버의 대표 캐릭터**로 댓글을 작성해주세요. (다른 서버 캐릭터로는 인증이 통과되지 않아요)\n"
+            "> ⚠️ 반드시 **브리트라 서버의 대표 캐릭터**로 댓글을 작성해주세요. (다른 서버 캐릭터 또는 전투력 450 미만 캐릭터는 인증이 통과되지 않아요)\n"
             "**4️⃣** 댓글 작성 후 **[댓글 작성 완료]** 버튼을 눌러주세요. 봇이 자동으로 확인 후 역할을 부여해드려요. 사용량에 따라 역할 부여에는 최대 2분이상 소요 될 수도 있습니다.\n\n"
             "## ❗ 주의사항\n"
             "- 인증 코드는 **본인만** 사용할 수 있으며, 타인에게 공유하지 마세요.\n"
-            "- 브리트라 서버 캐릭터가 아닐 경우 인증이 통과되지 않아요.\n"
+            "- 브리트라 서버 캐릭터가 아니거나 전투력이 450 미만일 경우 인증이 통과되지 않아요.\n"
             "- 댓글을 작성했는데도 인증이 안 된다면, 댓글이 실제로 게시됐는지 새로고침해서 확인 후 다시 시도해주세요.\n"
-            "- 소속 레기온과 무관하게 브리트라 서버 캐릭터면 누구나 인증 가능해요.\n"
+            "- 소속 레기온과 무관하게 브리트라 서버의 전투력 450 이상 캐릭터만 인증 가능해요.\n"
             "- 인증 관련 문제가 있다면 **문의 티켓**을 열어 운영진에게 알려주세요.\n\n"
             "인증이 완료되면 통합 디스코드의 모든 채널을 이용하실 수 있어요. 많은 이용 부탁드립니다! 🙏"
         )

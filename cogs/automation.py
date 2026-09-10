@@ -728,14 +728,14 @@ class Automation(commands.Cog):
             await get_alarm_role(guild, event_name)
 
         embed = discord.Embed(
-            title="🔔 알람 알림 설정",
+            title="🔔 알람 설정",
             description=(
                 "원하는 보스/이벤트 알람만 골라서 받을 수 있어요.\n"
-                "받고 싶은 알람의 버튼을 누르면 해당 역할이 부여되고, 이후 그 알람이 뜰 때 **#알람-채널**에서 멘션(핑)을 받아요.\n\n"
+                "받고 싶은 알람의 버튼을 누르면 해당 역할이 부여되고, 이후 그 알람이 뜰 때 \n**#알람-채널**에서 멘션(핑)을 받아요.\n\n"
                 "- ✅ 버튼을 누르면 → 역할 부여 (알림 받기 시작)\n"
                 "- ❌ 같은 버튼을 다시 누르면 → 역할 해제 (알림 그만 받기)\n"
                 "- 여러 개 동시에 선택 가능해요. 필요한 것만 골라서 받으세요!\n\n"
-                "> 💡 너무 많은 알림이 부담스러우면 자주 참여하는 것만 골라주세요."
+                "> 💡 아티쟁 전략 공유는 **어비스**를 클릭하여 권한을 받아주세요."
             ),
             color=discord.Color.gold(),
         )
@@ -925,8 +925,34 @@ class Automation(commands.Cog):
                 color=discord.Color.gold(),
                 timestamp=now,
             )
-            if result.get("summary"):
-                embed.add_field(name="📊 라운드 요약", value=result["summary"][:1024], inline=False)
+            record = result.get("record")
+            if record:
+                embed.add_field(
+                    name="아티쟁 결과",
+                    value=(
+                        f"브리트라 **{record['breitra_total']}** : "
+                        f"**{record['opponent_total']}** {record['opponent_server']}"
+                    ),
+                    inline=False,
+                )
+                territories = record.get("territories", [])
+                if territories:
+                    territory_lines = []
+                    for layer in ("하층", "중층"):
+                        layer_items = [item for item in territories if item["layer"] == layer]
+                        if not layer_items:
+                            continue
+                        territory_lines.append(layer)
+                        territory_lines.append("")
+                        territory_lines.extend(
+                            f"{item['name']}: **{item['server']}**" for item in layer_items
+                        )
+                        territory_lines.append("")
+                    embed.add_field(
+                        name="지역별 점령 결과",
+                        value="\n".join(territory_lines).rstrip(),
+                        inline=False,
+                    )
             embed.set_footer(text="아툴 비공식 참고용 통계 · 원본 보기")
             try:
                 await channel.send(embed=embed)
