@@ -5,3 +5,6 @@ verify_codes.json
 verify_config.json
 guild_config.json
 warnings.json
+.venv/
+.browsers/
+*.json.*.tmp

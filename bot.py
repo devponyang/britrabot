@@ -4,9 +4,11 @@ import logging
 import discord
 from discord.ext import commands
 from dotenv import load_dotenv
+from storage import BASE_DIR
+import aion2_scraper
 
 # .env 파일에서 환경변수 로드 (봇 토큰 등)
-load_dotenv()
+load_dotenv(BASE_DIR / ".env")
 
 TOKEN = os.getenv("DISCORD_TOKEN")
 
@@ -25,18 +27,29 @@ intents = discord.Intents.default()
 intents.members = True
 intents.message_content = True
 
-bot = commands.Bot(command_prefix="!", intents=intents, help_command=commands.DefaultHelpCommand())
+class ServerBot(commands.Bot):
+    async def setup_hook(self):
+        await load_extensions()
+        synced = await self.tree.sync()
+        logger.info("슬래시 명령어 %s개 동기화 완료", len(synced))
+
+    async def close(self):
+        try:
+            for extension in list(self.extensions):
+                await self.unload_extension(extension)
+            await super().close()
+        finally:
+            await aion2_scraper.close_browser()
+
+
+bot = ServerBot(command_prefix="!", intents=intents, help_command=None,
+                allowed_mentions=discord.AllowedMentions.none())
 
 
 @bot.event
 async def on_ready():
     logger.info(f"{bot.user} 로 로그인 완료 (ID: {bot.user.id})")
     logger.info(f"현재 {len(bot.guilds)}개 서버에서 작동 중입니다.")
-    try:
-        synced = await bot.tree.sync()
-        logger.info(f"슬래시 명령어 {len(synced)}개 동기화 완료")
-    except Exception as e:
-        logger.error(f"슬래시 명령어 동기화 실패: {e}")
 
 
 @bot.event
@@ -57,20 +70,22 @@ async def on_command_error(ctx, error):
 
 async def load_extensions():
     """cogs 폴더와 루트의 인증 확장을 불러옵니다."""
-    for filename in os.listdir("./cogs"):
+    for filename in sorted(os.listdir(BASE_DIR / "cogs")):
         if filename.endswith(".py") and not filename.startswith("_"):
             extension = f"cogs.{filename[:-3]}"
             try:
                 await bot.load_extension(extension)
                 logger.info(f"✅ 로드됨: {extension}")
             except Exception as e:
-                logger.error(f"❌ 로드 실패: {extension} - {e}")
+                logger.exception("확장 로딩 실패: %s", extension)
+                raise
 
     try:
         await bot.load_extension("verify")
         logger.info("✅ 로드됨: verify")
     except Exception as e:
-        logger.error(f"❌ 로드 실패: verify - {e}")
+        logger.exception("인증 확장 로딩 실패")
+        raise
 
 
 async def main():
@@ -78,7 +93,6 @@ async def main():
         logger.error("DISCORD_TOKEN이 설정되지 않았습니다. .env 파일을 확인하세요.")
         return
     async with bot:
-        await load_extensions()
         await bot.start(TOKEN)
 
 

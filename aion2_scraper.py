@@ -1,24 +1,11 @@
-"""
-아이온2 홈페이지(aion2.plaync.com)에서 정보를 가져오는 함수 모음.
-
-이 사이트는 자바스크립트로 그려지는 SPA라서 requests+BeautifulSoup로는
-내용을 볼 수 없어 Playwright(헤드리스 브라우저)로 실제 렌더링 후 읽어옵니다.
-특히 '종족'과 '레기온' 이름은 CSS ::before content로 그려지는 텍스트라
-일반 텍스트 추출(textContent)로는 안 잡히고, getComputedStyle로 직접
-계산된 스타일 값을 읽어와야 합니다.
-
-⚠️ 현재 상태:
-  - get_character_info(profile_url): 완성됨 (개발자도구로 확인한 실제 구조 기반)
-    - find_comment_by_code(article_url, code): 댓글 본문과 작성자 정보를 조회합니다.
-    확인되는 대로 이 함수만 채우면 전체 기능이 완성됩니다.
-
-  DUMMY_MODE가 True인 동안에는 실제 조회 없이 정해진 더미 데이터를 돌려줘서
-  디스코드 쪽 흐름만 먼저 테스트할 수 있습니다.
-"""
+"""아이온2 공식 게시판/캐릭터 및 아툴 통계를 비동기로 조회합니다."""
 
 import asyncio
 import re
-from urllib.parse import urlsplit, urlunsplit
+import logging
+from contextlib import asynccontextmanager
+from functools import wraps
+from urllib.parse import urlsplit, urlunsplit, urljoin
 
 from playwright.async_api import async_playwright
 
@@ -48,41 +35,96 @@ def is_excluded_official_article(category: str, title: str) -> bool:
 _playwright = None
 _browser = None
 _browser_lock = asyncio.Lock()
+_page_slots = asyncio.Semaphore(4)
+_background_slots = asyncio.Semaphore(1)
+logger = logging.getLogger(__name__)
+
+
+class ScrapeUnavailable(RuntimeError):
+    """The source could not be read reliably; do not penalize the user."""
+
+
+def is_official_url(url):
+    try:
+        parsed = urlsplit(url.strip())
+        return (parsed.scheme == "https" and parsed.hostname == "aion2.plaync.com"
+                and parsed.port in (None, 443) and not parsed.username and not parsed.password)
+    except (AttributeError, ValueError):
+        return False
+
+
+@asynccontextmanager
+async def browser_page():
+    async with _page_slots:
+        browser = await _get_browser()
+        page = await browser.new_page()
+        try:
+            yield page
+        finally:
+            try:
+                await page.close()
+            except Exception:
+                logger.exception("브라우저 페이지 정리 실패")
 
 
 async def _get_browser():
     """헤드리스 브라우저를 한 번만 켜두고 재사용합니다."""
     global _playwright, _browser
     async with _browser_lock:
-        if _browser is None:
+        if _browser is None or not _browser.is_connected():
+            if _playwright is not None:
+                await _playwright.stop()
+                _playwright = None
+            _browser = None
             _playwright = await async_playwright().start()
-            _browser = await _playwright.chromium.launch(headless=True)
+            try:
+                _browser = await _playwright.chromium.launch(headless=True)
+            except BaseException:
+                await _playwright.stop()
+                _playwright = None
+                raise
     return _browser
 
 
 async def close_browser():
-    """봇 종료 시 호출하면 좋습니다 (선택 사항)."""
+    """봇 종료 시 브라우저와 Playwright 런타임을 정리합니다."""
     global _playwright, _browser
-    if _browser:
-        await _browser.close()
-        _browser = None
-    if _playwright:
-        await _playwright.stop()
-        _playwright = None
+    async with _browser_lock:
+        try:
+            if _browser:
+                await _browser.close()
+        finally:
+            _browser = None
+            if _playwright:
+                await _playwright.stop()
+                _playwright = None
 
 
+def background_scrape(callback):
+    @wraps(callback)
+    async def run(*args, **kwargs):
+        # Reserve capacity for verification while periodic collection is active.
+        async with _background_slots:
+            return await callback(*args, **kwargs)
+    return run
+
+
+@background_scrape
 async def get_latest_official_articles(limit: int = 10) -> list[dict]:
     """공식 사이트 네 게시판에서 최신 게시글 목록을 수집합니다."""
     if DUMMY_MODE:
         return []
 
-    browser = await _get_browser()
-    page = await browser.new_page()
     articles = []
     seen_urls = set()
-    try:
+    async with browser_page() as page:
         for category, list_url in OFFICIAL_BOARD_URLS.items():
-            await page.goto(list_url, wait_until="networkidle", timeout=30000)
+            try:
+                await page.goto(list_url, wait_until="domcontentloaded", timeout=30000)
+                await page.locator("a[href*='/view?articleId=']").first.wait_for(timeout=15000)
+            except Exception:
+                logger.exception("공식 게시판 수집 실패: %s", category)
+                continue
             links = await page.locator("a[href*='/view?articleId=']").evaluate_all(
                 """els => els.map(a => ({href: a.href, text: (a.innerText || '').trim()}))"""
             )
@@ -100,18 +142,15 @@ async def get_latest_official_articles(limit: int = 10) -> list[dict]:
                 if category_count >= limit:
                     break
         return articles
-    finally:
-        await page.close()
 
 
+@background_scrape
 async def get_latest_artifact_result(expected_date=None) -> dict | None:
     """아툴에서 최근 집계 완료된 아티팩트쟁 결과를 가져옵니다."""
     if DUMMY_MODE:
         return None
 
-    browser = await _get_browser()
-    page = await browser.new_page()
-    try:
+    async with browser_page() as page:
         await page.goto(ARTIFACT_RESULT_URL, wait_until="domcontentloaded", timeout=30000)
         body_text = ""
         for _ in range(15):
@@ -143,18 +182,15 @@ async def get_latest_artifact_result(expected_date=None) -> dict | None:
             "record": breitra_record,
             "url": ARTIFACT_RESULT_URL,
         }
-    finally:
-        await page.close()
 
 
+@background_scrape
 async def get_artifact_server_record(opponent_server: str) -> dict | None:
     """아툴에서 브리트라와 상대 서버의 아티팩트 전적을 가져옵니다."""
     if DUMMY_MODE:
         return None
 
-    browser = await _get_browser()
-    page = await browser.new_page()
-    try:
+    async with browser_page() as page:
         await page.goto(ARTIFACT_RESULT_URL, wait_until="domcontentloaded", timeout=30000)
         body_text = ""
         for _ in range(15):
@@ -163,22 +199,19 @@ async def get_artifact_server_record(opponent_server: str) -> dict | None:
                 break
             await page.wait_for_timeout(1000)
 
-        record = parse_artifact_server_record(body_text, opponent_server)
+        record = parse_artifact_server_record(body_text.replace("브리 트라", "브리트라"), opponent_server)
         if record is None:
             return None
         return record | {"url": ARTIFACT_RESULT_URL}
-    finally:
-        await page.close()
 
 
+@background_scrape
 async def get_artifact_server_history(opponent_server: str) -> dict | None:
     """아툴의 해당 서버 매칭 기록보기를 열어 회차별 기록을 가져옵니다."""
     if DUMMY_MODE:
         return None
 
-    browser = await _get_browser()
-    page = await browser.new_page()
-    try:
+    async with browser_page() as page:
         await page.goto(ARTIFACT_RESULT_URL, wait_until="domcontentloaded", timeout=30000)
         body_text = ""
         for _ in range(15):
@@ -198,7 +231,7 @@ async def get_artifact_server_history(opponent_server: str) -> dict | None:
             ancestor = candidate
             for _ in range(8):
                 text = (await ancestor.inner_text()).strip()
-                if "브리트라" in text and opponent_server in text:
+                if "브리트라" in text.replace("브리 트라", "브리트라") and opponent_server in text:
                     if target_text_length is None or len(text) < target_text_length:
                         target = candidate
                         target_text_length = len(text)
@@ -207,7 +240,7 @@ async def get_artifact_server_history(opponent_server: str) -> dict | None:
         if target is None:
             return None
         await target.click()
-        await page.wait_for_timeout(500)
+        await page.locator("table tr").filter(has_text=re.compile(r"\d{4}-\d{2}-\d{2}")).first.wait_for(timeout=10000)
 
         rows = await page.locator("table tr").evaluate_all(
             """rows => rows.map(row => ({
@@ -222,8 +255,6 @@ async def get_artifact_server_history(opponent_server: str) -> dict | None:
             "records": parse_artifact_history_rows(rows),
             "source_url": page.url,
         }
-    finally:
-        await page.close()
 
 
 def parse_artifact_history_rows(rows: list[dict]) -> list[dict]:
@@ -386,51 +417,84 @@ async def get_breitra_territory_results(page, left_server: str, right_server: st
     return results
 
 
-async def find_comment_by_code(article_url: str, code: str):
-    """
-    인증 게시글의 댓글 목록에서 `code`가 포함된 댓글을 찾아
-    작성자 닉네임과 프로필 URL을 반환합니다.
+MAX_COMMENT_PAGES = 30
 
-    찾으면: {"nickname": "작성자닉네임", "profile_url": "https://aion2.plaync.com/..."}
-    못 찾으면: None
-    """
+
+def contains_code(text: str, code: str) -> bool:
+    return bool(re.search(r"(?<![A-Za-z0-9])" + re.escape(code) + r"(?![A-Za-z0-9])", text))
+
+
+async def goto_official(page, url):
+    if not is_official_url(url):
+        raise ScrapeUnavailable("Invalid official URL")
+    response = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
+    if (response and response.status >= 400) or not is_official_url(page.url):
+        raise ScrapeUnavailable("Official page unavailable or redirected")
+
+
+async def advance_comments(page, previous_text):
+    # Only click comment controls, never unrelated board navigation or submit buttons.
+    candidates = page.locator('[class*="comment"] button, [class*="comment"] a').filter(
+        has_text=re.compile(r"^(?:(?:이전\s*)?댓글\s*보기|(?:댓글\s*)?더\s*보기|다음(?:\s*페이지)?)$")
+    )
+    for index in range(await candidates.count()):
+        candidate = candidates.nth(index)
+        if not await candidate.is_visible() or not await candidate.is_enabled():
+            continue
+        if await candidate.get_attribute("aria-disabled") == "true":
+            continue
+        await candidate.click()
+        try:
+            await page.wait_for_function(
+                "previous => Array.from(document.querySelectorAll('div.comment-article'))"
+                ".map(e => e.innerText).join('\\n') !== previous",
+                arg=previous_text, timeout=10000,
+            )
+        except Exception as error:
+            raise ScrapeUnavailable("Comment pagination did not load") from error
+        await page.locator("div.comment-article").first.wait_for(timeout=10000)
+        return True
+    return False
+
+
+async def find_comment_by_code(article_url: str, code: str):
+    """Read bounded comment pages; source failures are distinct from a missing code."""
+    if not code:
+        return None
     if DUMMY_MODE:
         if code.startswith("TEST"):
-            return {
-                "nickname": "더미테스트유저",
-                "profile_url": f"{BASE_URL}/ko-kr/profile/character/0000/dummy",
-            }
+            return {"nickname": "더미테스트유저", "profile_url": f"{BASE_URL}/ko-kr/profile/character/0000/dummy"}
         return None
-
-    browser = await _get_browser()
-    page = await browser.new_page()
-    try:
-        await page.goto(article_url, wait_until="domcontentloaded", timeout=30000)
+    async with browser_page() as page:
+        await goto_official(page, article_url)
         try:
             await page.locator("div.comment-article").first.wait_for(timeout=15000)
-        except Exception:
-            return None
-
-        comment_articles = await page.query_selector_all("div.comment-article")
-        for comment in comment_articles:
-            content_el = await comment.query_selector("div.comment-contents")
-            if not content_el:
-                continue
-            content_text = await content_el.inner_text()
-            if code not in content_text:
-                continue
-
-            writer_el = await comment.query_selector("div.writer a.name")
-            if not writer_el:
-                continue
-            nickname = (await writer_el.inner_text()).strip()
-            href = await writer_el.get_attribute("href")
-            profile_url = BASE_URL + href if href and href.startswith("/") else href
-            return {"nickname": nickname, "profile_url": profile_url}
-
-        return None
-    finally:
-        await page.close()
+        except Exception as error:
+            raise ScrapeUnavailable("Comments did not load") from error
+        seen_pages = set()
+        for _ in range(MAX_COMMENT_PAGES):
+            rows = await page.locator("div.comment-article").evaluate_all(
+                """els => els.map(e => ({
+                    text: e.innerText,
+                    content: e.querySelector('div.comment-contents')?.innerText || '',
+                    nickname: e.querySelector('div.writer a.name')?.innerText || '',
+                    href: e.querySelector('div.writer a.name')?.getAttribute('href')
+                }))"""
+            )
+            signature = "\n".join(row["text"] for row in rows)
+            if not rows or signature in seen_pages:
+                raise ScrapeUnavailable("Comment pagination repeated or returned no content")
+            seen_pages.add(signature)
+            for row in rows:
+                if not contains_code(row["content"], code):
+                    continue
+                profile_url = urljoin(BASE_URL, row["href"] or "")
+                if not row["href"] or not row["nickname"] or not is_official_url(profile_url):
+                    raise ScrapeUnavailable("Comment author profile unavailable")
+                return {"nickname": row["nickname"].strip(), "profile_url": profile_url}
+            if not await advance_comments(page, signature):
+                return None
+        raise ScrapeUnavailable("Comment scan limit reached; retry with a recent comment")
 
 
 async def get_character_info(profile_url: str):
@@ -450,9 +514,9 @@ async def get_character_info(profile_url: str):
             "power_level": 450,
         }
 
-    browser = await _get_browser()
-    page = await browser.new_page()
-    try:
+    if not is_official_url(profile_url):
+        raise ScrapeUnavailable("Invalid official profile URL")
+    async with browser_page() as page:
         parsed_url = urlsplit(profile_url)
         detail_path = parsed_url.path.replace("/profile/character/", "/characters/", 1)
         detail_path = detail_path.split("/board/", 1)[0]
@@ -460,7 +524,7 @@ async def get_character_info(profile_url: str):
             (parsed_url.scheme, parsed_url.netloc, detail_path, parsed_url.query, "")
         )
 
-        await page.goto(profile_url, wait_until="domcontentloaded", timeout=30000)
+        await goto_official(page, profile_url)
         try:
             await page.locator(".classcard").wait_for(timeout=15000)
         except Exception:
@@ -468,13 +532,13 @@ async def get_character_info(profile_url: str):
         class_el = await page.query_selector(".classcard")
         class_name = (await class_el.inner_text()).strip() if class_el else None
 
-        await page.goto(detail_url, wait_until="domcontentloaded", timeout=30000)
+        await goto_official(page, detail_url)
 
         desc = page.locator(".profile__info-desc")
         try:
             await desc.wait_for(timeout=10000)
         except Exception:
-            return None  # 캐릭터 정보가 없는 프로필이거나 페이지 구조가 다름
+            raise ScrapeUnavailable("Character profile did not load")
 
         name_el = await page.query_selector(".profile__info-name")
         if not name_el:
@@ -527,5 +591,3 @@ async def get_character_info(profile_url: str):
             "legion": legion or "없음",
             "power_level": power_level,
         }
-    finally:
-        await page.close()

@@ -1,6 +1,10 @@
+import logging
 import discord
 from discord import app_commands
 from discord.ext import commands
+from discord_helpers import purge_messages
+
+logger = logging.getLogger(__name__)
 
 
 class Moderation(commands.Cog):
@@ -16,14 +20,7 @@ class Moderation(commands.Cog):
     @app_commands.describe(amount="삭제할 메시지 개수(1~100)")
     @app_commands.checks.has_permissions(administrator=True)
     async def purge(self, interaction: discord.Interaction, amount: int):
-        if not interaction.guild.me.guild_permissions.manage_messages:
-            return await interaction.response.send_message(
-                "❌ 봇에게 메시지 관리 권한이 없어요.", ephemeral=True
-            )
-        amount = max(1, min(amount, 100))
-        await interaction.response.defer(ephemeral=True)
-        deleted = await interaction.channel.purge(limit=amount)
-        await interaction.followup.send(f"🧹 메시지 {len(deleted)}개를 삭제했어요.", ephemeral=True)
+        await purge_messages(interaction, amount)
 
     # ---------- 슬래시 명령어 에러 처리 ----------
     async def cog_app_command_error(
@@ -32,6 +29,7 @@ class Moderation(commands.Cog):
         if isinstance(error, app_commands.MissingPermissions):
             msg = "❌ 이 명령어를 실행할 권한이 없어요."
         else:
+            logger.error("모더레이션 명령 실패", exc_info=error)
             msg = "❌ 알 수 없는 오류가 발생했어요."
         if interaction.response.is_done():
             await interaction.followup.send(msg, ephemeral=True)

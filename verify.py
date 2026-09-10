@@ -1,10 +1,6 @@
-import json
-import os
-import random
-import string
-import datetime
-import time
-import re
+import asyncio
+import logging
+from functools import wraps
 
 import discord
 from discord import app_commands
@@ -12,52 +8,36 @@ from discord.ext import commands
 
 import aion2_scraper
 
-CODE_FILE = "verify_codes.json"
-CONFIG_FILE = "verify_config.json"
+from storage import BASE_DIR, load_json as _load, save_json as _save
+from verification_state import (generate_code, save_pending_code, get_pending_code,
+    mark_verified, get_cooldown_remaining, record_verification_failure, code_expired,
+    MAX_VERIFY_ATTEMPTS)
 
-DEFAULT_ARTICLE_URL = (
+CONFIG_FILE = BASE_DIR / "verify_config.json"
+logger = logging.getLogger(__name__)
+IN_FLIGHT = set()
+VERIFY_SLOTS = asyncio.Semaphore(3)
+
+LEGACY_ARTICLE_URL = (
     "https://aion2.plaync.com/ko-kr/board/server/view"
     "?articleId=6a9a6c96feeef62e67566500&categoryId=69094e85a7d3dc347cdf1e18"
 )
+DEFAULT_ARTICLE_URL = LEGACY_ARTICLE_URL.replace("6a9a6c96feeef62e67566500", "6a9e37619ed1202b9b8fb310")
 DEFAULT_TARGET_SERVER = "브리트라"
-AUTOMATION_CONFIG_FILE = "guild_config.json"
-MAX_VERIFY_ATTEMPTS = 3
-VERIFY_COOLDOWN_SECONDS = 10 * 60
+AUTOMATION_CONFIG_FILE = BASE_DIR / "guild_config.json"
 MIN_POWER_LEVEL = 450
-ALARM_ROLE_GUILD_ID = 1545016047332237332
-ALARM_ROLE_IDS = {
-    "카이라": 1547034865885646859,
-    "나흐마": 1547034865885646859,
-    "시공쟁탈전": 1547035053677092884,
-    "어비스 균열지대": 1547035121339736094,
-    "아티팩트쟁": 1547035121339736094,
-    "어비스 필드보스": 1547034865885646859,
-}
-ALARM_ROLE_GROUPS = (
-    ("필드보스", "🐉", "어비스 필드보스"),
-    ("시공", "⏳", "시공쟁탈전"),
-    ("어비스", "🌌", "어비스 균열지대"),
-)
+from alarm_settings import ALARM_ROLE_GUILD_ID, ALARM_ROLE_IDS, ALARM_ROLE_GROUPS
+from discord_helpers import SafeView, open_ticket, toggle_role
 ACTIVE_VERIFY_MESSAGES: dict[tuple[int, int], discord.WebhookMessage] = {}
 
 
 # ---------------- 저장소 헬퍼 ----------------
-def _load(path: str) -> dict:
-    if not os.path.exists(path):
-        return {}
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-
-def _save(path: str, data: dict):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-
 def get_guild_config(guild_id: int) -> dict:
     data = _load(CONFIG_FILE)
     cfg = data.get(str(guild_id), {})
     cfg.setdefault("article_url", DEFAULT_ARTICLE_URL)
+    if cfg["article_url"] == LEGACY_ARTICLE_URL:
+        cfg["article_url"] = DEFAULT_ARTICLE_URL
     cfg.setdefault("target_server", DEFAULT_TARGET_SERVER)
     cfg.setdefault("role_id", None)
     return cfg
@@ -69,83 +49,100 @@ def set_guild_config(guild_id: int, key: str, value):
     _save(CONFIG_FILE, data)
 
 
-def generate_code() -> str:
-    chars = string.ascii_letters + string.digits
-    return "".join(random.choices(chars, k=8))
+def build_verification_progress_embed() -> discord.Embed:
+    embed = discord.Embed(
+        title="⏳ 인증을 진행 중입니다",
+        description=(
+            "작성하신 댓글과 캐릭터 정보를 확인하고 있습니다.\n\n"
+            "**완료 안내가 나올 때까지 버튼을 다시 누르지 마세요.**\n"
+            "잠시만 기다려주세요. 순서대로 처리하고 있습니다."
+        ),
+        color=discord.Color.blurple(),
+    )
+    embed.set_footer(text="이 안내는 본인에게만 표시됩니다 · 최대 3분 소요")
+    return embed
 
 
-def save_pending_code(user_id: int, guild_id: int, code: str):
-    data = _load(CODE_FILE)
-    previous = data.get(str(user_id), {})
-    data[str(user_id)] = {
-        "code": code,
-        "guild_id": guild_id,
-        "created_at": datetime.datetime.utcnow().isoformat(),
-        "verified": previous.get("verified", False),
-        "attempts": previous.get("attempts", 0),
-        "cooldown_until": previous.get("cooldown_until", 0),
-    }
-    _save(CODE_FILE, data)
+async def finish_verification(interaction: discord.Interaction, message: str | None = None, *, embed=None):
+    """Replace the private progress message for every terminal outcome."""
+    if embed is None:
+        success = message.startswith("✅")
+        embed = discord.Embed(
+            title="✅ 인증 완료" if success else "📋 인증 확인 안내",
+            description=message,
+            color=discord.Color.green() if success else discord.Color.orange(),
+        )
+    return await interaction.edit_original_response(content=None, embed=embed)
 
 
-def get_pending_code(user_id: int):
-    data = _load(CODE_FILE)
-    return data.get(str(user_id))
+def verification_request(callback):
+    @wraps(callback)
+    async def guarded(self, interaction, button):
+        if interaction.guild is None:
+            return await interaction.response.send_message("서버 안에서 이용해주세요.", ephemeral=True)
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        key = (interaction.guild.id, interaction.user.id)
+        if key in IN_FLIGHT:
+            return await interaction.followup.send("⏳ 이미 인증을 처리 중이에요. 결과를 기다려주세요.", ephemeral=True)
+        IN_FLIGHT.add(key)
+        checking = button.custom_id == "verify:check"
+        try:
+            if checking:
+                await interaction.edit_original_response(content=None, embed=build_verification_progress_embed())
+            async with asyncio.timeout(180):
+                async with VERIFY_SLOTS:
+                    return await callback(self, interaction, button)
+        except Exception:
+            logger.exception("인증 처리 실패: guild=%s user=%s", *key)
+            message = "⚠️ 인증 처리 중 오류가 발생했어요. 잠시 후 다시 시도해주세요. 실패 횟수는 추가되지 않아요."
+            if checking:
+                await finish_verification(interaction, message)
+            else:
+                await interaction.followup.send(message, ephemeral=True)
+        finally:
+            IN_FLIGHT.discard(key)
+    return guarded
 
 
-def mark_verified(user_id: int):
-    data = _load(CODE_FILE)
-    if str(user_id) in data:
-        data[str(user_id)]["verified"] = True
-        _save(CODE_FILE, data)
+def role_error(guild, role):
+    if role is None:
+        return "인증 역할이 설정되지 않았거나 삭제됐어요. 관리자에게 문의해주세요."
+    if not guild.me.guild_permissions.manage_roles or not role.is_assignable():
+        return "봇이 인증 역할을 부여할 수 없어요. 관리자가 역할 관리 권한과 역할 순서를 확인해야 해요."
+    return None
 
 
-def get_cooldown_remaining(user_id: int) -> int:
-    pending = get_pending_code(user_id)
-    if not pending:
-        return 0
-    return max(0, int(float(pending.get("cooldown_until", 0)) - time.time()))
-
-
-def record_verification_failure(user_id: int) -> tuple[int, int]:
-    data = _load(CODE_FILE)
-    pending = data.get(str(user_id), {})
-    attempts = int(pending.get("attempts", 0)) + 1
-    cooldown_until = 0
-    if attempts >= MAX_VERIFY_ATTEMPTS:
-        cooldown_until = time.time() + VERIFY_COOLDOWN_SECONDS
-    pending["attempts"] = attempts
-    pending["cooldown_until"] = cooldown_until
-    data[str(user_id)] = pending
-    _save(CODE_FILE, data)
-    return attempts, int(max(0, cooldown_until - time.time()))
+def is_verified(pending, config, member):
+    return bool(pending and pending.get("verified") and
+                pending.get("role_id") == config.get("role_id") and
+                any(role.id == config.get("role_id") for role in member.roles))
 
 
 async def log_verification(guild: discord.Guild, message: str):
-    config = _load(AUTOMATION_CONFIG_FILE).get(str(guild.id), {})
-    channel_id = config.get("log_channel")
-    if not channel_id:
-        return
-    channel = guild.get_channel(channel_id)
-    if channel:
-        await channel.send(f"🔐 {message}")
+    try:
+        config = _load(AUTOMATION_CONFIG_FILE).get(str(guild.id), {})
+        channel = guild.get_channel(config.get("log_channel")) if config.get("log_channel") else None
+        if channel:
+            await channel.send(f"🔐 {message}", allowed_mentions=discord.AllowedMentions.none())
+    except Exception:
+        logger.exception("인증 로그 전송 실패")
 
 
 async def send_verification_failure(
     interaction: discord.Interaction, message: str, reason: str
 ):
-    attempts, cooldown = record_verification_failure(interaction.user.id)
+    attempts, cooldown = record_verification_failure(interaction.user.id, interaction.guild.id)
     await log_verification(
         interaction.guild,
         f"실패: {interaction.user} ({interaction.user.id}) - {reason} ({attempts}/{MAX_VERIFY_ATTEMPTS})",
     )
     if cooldown:
         message += "\n⚠️ 실패 횟수를 초과해 10분 동안 재시도할 수 없어요."
-    return await interaction.followup.send(message, ephemeral=True)
+    return await finish_verification(interaction, message)
 
 
 # ---------------- 버튼 UI ----------------
-class VerifyPanelView(discord.ui.View):
+class VerifyPanelView(SafeView):
     """인증 센터에 올라가는 '인증진행' 버튼 (영구 View)"""
 
     def __init__(self):
@@ -155,21 +152,21 @@ class VerifyPanelView(discord.ui.View):
     @discord.ui.button(
         label="인증진행", style=discord.ButtonStyle.success, custom_id="verify:start"
     )
+    @verification_request
     async def start_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        pending = get_pending_code(interaction.user.id)
-        if pending and pending.get("verified"):
-            return await interaction.followup.send(
-                "✅ 이미 인증된 사용자예요.", ephemeral=True
-            )
-        cooldown = get_cooldown_remaining(interaction.user.id)
+        pending = get_pending_code(interaction.user.id, interaction.guild.id)
+        config = get_guild_config(interaction.guild.id)
+        if is_verified(pending, config, interaction.user):
+            await interaction.followup.send("✅ 이미 인증된 사용자예요.", ephemeral=True)
+            return await send_verification_alarm_panel(interaction)
+        cooldown = get_cooldown_remaining(interaction.user.id, interaction.guild.id)
         if cooldown:
             return await interaction.followup.send(
                 f"⚠️ 인증 실패 횟수를 초과했어요. {max(1, (cooldown + 59) // 60)}분 후 다시 시도해주세요.",
                 ephemeral=True,
             )
         code = pending.get("code") if pending else None
-        if not code:
+        if not code or code_expired(pending):
             code = generate_code()
             save_pending_code(interaction.user.id, interaction.guild.id, code)
         config = get_guild_config(interaction.guild.id)
@@ -180,7 +177,7 @@ class VerifyPanelView(discord.ui.View):
             "대표 캐릭터를 반드시 확인 부탁드립니다.\n\n"
             "댓글 작성이 완료되면 아래의 **댓글 작성 완료 (다음)** 버튼을 눌러주세요."
         )
-        embed.add_field(name="🔑 발급된 인증 코드", value=f"`{code}`", inline=False)
+        embed.add_field(name="🔑 발급된 인증 코드 (30분 유효)", value=f"`{code}`", inline=False)
 
         message_key = (interaction.guild.id, interaction.user.id)
         message_view = VerifyCodeView(config["article_url"])
@@ -197,6 +194,10 @@ class VerifyPanelView(discord.ui.View):
             embed=embed, view=message_view, ephemeral=True, wait=True
         )
         ACTIVE_VERIFY_MESSAGES[message_key] = message
+        def forget():
+            if ACTIVE_VERIFY_MESSAGES.get(message_key) is message:
+                ACTIVE_VERIFY_MESSAGES.pop(message_key, None)
+        asyncio.get_running_loop().call_later(900, forget)
 
 
 class VerifyTicketButton(discord.ui.Button):
@@ -209,51 +210,7 @@ class VerifyTicketButton(discord.ui.Button):
         )
 
     async def callback(self, interaction: discord.Interaction):
-        guild = interaction.guild
-        topic = f"티켓 대상: {interaction.user.id}"
-        existing = next(
-            (channel for channel in guild.text_channels if channel.topic == topic), None
-        )
-        if existing:
-            await interaction.response.send_message(
-                f"이미 열려 있는 티켓이 있어요: {existing.mention}", ephemeral=True
-            )
-            return
-
-        await interaction.response.defer(ephemeral=True)
-        safe_name = re.sub(r"[^0-9A-Za-z가-힣_-]", "-", interaction.user.display_name).strip("-")
-        channel_name = f"티켓-{safe_name or interaction.user.id}"[:100]
-        overwrites = {
-            guild.default_role: discord.PermissionOverwrite(view_channel=False),
-            interaction.user: discord.PermissionOverwrite(
-                view_channel=True, send_messages=True, read_message_history=True
-            ),
-            guild.me: discord.PermissionOverwrite(
-                view_channel=True,
-                send_messages=True,
-                read_message_history=True,
-                manage_channels=True,
-                manage_messages=True,
-            ),
-        }
-        try:
-            channel = await guild.create_text_channel(
-                channel_name,
-                overwrites=overwrites,
-                topic=topic,
-                reason=f"{interaction.user}가 인증 패널에서 티켓 생성",
-            )
-            await channel.send(
-                f"{interaction.user.mention} 님의 티켓이 생성됐어요. 운영진에게 문의 내용을 남겨주세요."
-            )
-        except discord.Forbidden:
-            await interaction.followup.send(
-                "❌ 봇에게 채널 관리 권한이 없어 티켓을 만들 수 없어요.", ephemeral=True
-            )
-            return
-        await interaction.followup.send(
-            f"✅ 티켓 채널 {channel.mention}을 생성했어요.", ephemeral=True
-        )
+        await open_ticket(interaction)
 
 
 class VerificationAlarmRoleButton(discord.ui.Button):
@@ -267,37 +224,47 @@ class VerificationAlarmRoleButton(discord.ui.Button):
         self.role_event_name = role_event_name
 
     async def callback(self, interaction: discord.Interaction):
-        if interaction.guild is None or interaction.guild.id != ALARM_ROLE_GUILD_ID:
-            await interaction.response.send_message(
-                "❌ 이 서버에서는 사용할 수 없는 버튼이에요.", ephemeral=True
-            )
-            return
-
-        role = interaction.guild.get_role(ALARM_ROLE_IDS[self.role_event_name])
-        if role is None:
-            await interaction.response.send_message(
-                "❌ 알람 역할을 준비하지 못했어요. 봇의 역할 설정을 확인해주세요.",
-                ephemeral=True,
-            )
-            return
-
-        if role in interaction.user.roles:
-            await interaction.user.remove_roles(role, reason="알람 역할 해제")
-            message = f"✅ {role.mention} 역할을 해제했어요."
-        else:
-            await interaction.user.add_roles(role, reason="알람 역할 선택")
-            message = f"✅ {role.mention} 역할을 받았어요."
-        await interaction.response.send_message(message, ephemeral=True)
+        await toggle_role(interaction, ALARM_ROLE_GUILD_ID, ALARM_ROLE_IDS[self.role_event_name])
 
 
-class VerificationAlarmRoleView(discord.ui.View):
+class VerificationAlarmRoleView(SafeView):
     def __init__(self):
         super().__init__(timeout=None)
         for group_name, emoji, role_event_name in ALARM_ROLE_GROUPS:
             self.add_item(VerificationAlarmRoleButton(group_name, emoji, role_event_name))
 
 
-class VerifyCodeView(discord.ui.View):
+def build_verification_alarm_embed() -> discord.Embed:
+    return discord.Embed(
+        title="🔔 알람 설정",
+        description=(
+            "원하는 보스/이벤트 알람만 골라서 받을 수 있어요. "
+            "받고 싶은 알람의 버튼을 누르면 해당 역할이 부여되고, "
+            "이후 그 알람이 뜰 때 **#알람-채널**에서 멘션(핑)을 받아요.\n\n"
+            "- 버튼을 누르면 → 역할 부여 (알림 받기 시작)\n"
+            "- 같은 버튼을 다시 누르면 → 역할 해제 (알림 그만 받기)\n"
+            "- 여러 개 동시에 선택 가능해요. 필요한 것만 골라서 받으세요!\n\n"
+            "> 아티쟁 전략 공유는 **어비스**를 클릭하여 권한을 받아주세요."
+        ),
+        color=discord.Color.gold(),
+    )
+
+
+async def send_verification_alarm_panel(interaction: discord.Interaction):
+    if interaction.guild.id != ALARM_ROLE_GUILD_ID:
+        return
+    try:
+        await interaction.followup.send(
+            embed=build_verification_alarm_embed(),
+            view=VerificationAlarmRoleView(),
+            ephemeral=True,
+        )
+    except discord.HTTPException:
+        # Delivery failure must not replace an already successful verification result.
+        logger.exception("인증 후 알람 설정 패널 전송 실패: user=%s", interaction.user.id)
+
+
+class VerifyCodeView(SafeView):
     """코드 발급 후 보여주는 '인증게시판으로 이동' + '댓글 작성 완료' 버튼 (영구 View)"""
 
     def __init__(self, article_url: str = DEFAULT_ARTICLE_URL):
@@ -315,39 +282,37 @@ class VerifyCodeView(discord.ui.View):
         style=discord.ButtonStyle.primary,
         custom_id="verify:check",
     )
+    @verification_request
     async def check_button(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.defer(ephemeral=True)
-        pending = get_pending_code(interaction.user.id)
+        pending = get_pending_code(interaction.user.id, interaction.guild.id)
         if not pending:
-            return await interaction.followup.send(
+            return await finish_verification(interaction,
                 "❌ 발급된 인증 코드가 없어요. 먼저 **인증진행** 버튼을 눌러주세요.",
-                ephemeral=True,
             )
-        if pending.get("verified"):
-            return await interaction.followup.send(
-                "✅ 이미 인증된 사용자예요.", ephemeral=True
-            )
-        cooldown = get_cooldown_remaining(interaction.user.id)
+        config = get_guild_config(interaction.guild.id)
+        if is_verified(pending, config, interaction.user):
+            await finish_verification(interaction, "✅ 이미 인증된 사용자예요.")
+            return await send_verification_alarm_panel(interaction)
+        cooldown = get_cooldown_remaining(interaction.user.id, interaction.guild.id)
         if cooldown:
-            return await interaction.followup.send(
+            return await finish_verification(interaction,
                 f"⚠️ 잠시 후 다시 시도해주세요. 남은 시간: {max(1, (cooldown + 59) // 60)}분",
-                ephemeral=True,
             )
 
-        config = get_guild_config(pending["guild_id"])
+        if code_expired(pending):
+            return await finish_verification(interaction, "⌛ 인증 코드가 만료됐어요. 인증진행 버튼으로 새 코드를 받아 댓글을 작성해주세요.")
+        config = get_guild_config(interaction.guild.id)
+        role = interaction.guild.get_role(config["role_id"]) if config["role_id"] else None
+        problem = role_error(interaction.guild, role)
+        if problem:
+            return await finish_verification(interaction, f"⚠️ {problem}")
         code = pending["code"]
 
         try:
             comment = await aion2_scraper.find_comment_by_code(config["article_url"], code)
-        except NotImplementedError:
-            return await interaction.followup.send(
-                "⚠️ 아직 조회 기능이 완전히 연결되지 않았어요. 관리자에게 문의해주세요.",
-                ephemeral=True,
-            )
-        except Exception as e:
-            return await interaction.followup.send(
-                f"⚠️ 게시판 조회 중 오류가 발생했어요: {e}", ephemeral=True
-            )
+        except Exception:
+            logger.exception("게시판 조회 실패")
+            return await finish_verification(interaction, "⚠️ 게시판 조회에 실패했어요. 잠시 후 재시도해주세요. 실패 횟수는 추가되지 않아요.")
 
         if not comment:
             return await send_verification_failure(
@@ -358,22 +323,12 @@ class VerifyCodeView(discord.ui.View):
 
         try:
             char_info = await aion2_scraper.get_character_info(comment["profile_url"])
-        except NotImplementedError:
-            return await interaction.followup.send(
-                "⚠️ 아직 캐릭터 조회 기능이 완전히 연결되지 않았어요. 관리자에게 문의해주세요.",
-                ephemeral=True,
-            )
-        except Exception as e:
-            return await interaction.followup.send(
-                f"⚠️ 캐릭터 정보 조회 중 오류가 발생했어요: {e}", ephemeral=True
-            )
+        except Exception:
+            logger.exception("캐릭터 조회 실패")
+            return await finish_verification(interaction, "⚠️ 캐릭터 조회에 실패했어요. 잠시 후 재시도해주세요. 실패 횟수는 추가되지 않아요.")
 
-        if not char_info:
-            return await send_verification_failure(
-                interaction,
-                f"❌ `{comment['nickname']}` 캐릭터 정보를 찾을 수 없어요.",
-                "캐릭터 정보를 찾지 못함",
-            )
+        if not char_info or char_info.get("power_level") is None:
+            return await finish_verification(interaction, "⚠️ 캐릭터 정보를 확인하지 못했어요. 잠시 후 재시도해주세요. 실패 횟수는 추가되지 않아요.")
 
         if char_info["server"] != config["target_server"]:
             return await send_verification_failure(
@@ -393,19 +348,18 @@ class VerifyCodeView(discord.ui.View):
                 "전투력 기준 미달 또는 확인 불가",
             )
 
-        # ---- 인증 성공: 역할 부여 ----
-        role = None
-        if config["role_id"]:
-            role = interaction.guild.get_role(config["role_id"])
-
-        if role:
-            try:
-                await interaction.user.add_roles(role, reason="아이온2 서버 인증 성공")
-            except discord.Forbidden:
-                await interaction.followup.send(
-                    "⚠️ 인증은 확인됐지만 봇에게 역할 부여 권한이 없어요. 관리자에게 문의해주세요.",
-                    ephemeral=True,
-                )
+        if code_expired(pending):
+            return await finish_verification(interaction, "조회 중 인증 코드가 만료됐어요. 새 코드를 발급해주세요.")
+        # Settings may have changed while the external pages were loading.
+        if get_guild_config(interaction.guild.id) != config:
+            return await finish_verification(interaction, "인증 설정이 변경됐어요. 다시 시도해주세요.")
+        try:
+            await interaction.user.add_roles(role, reason="아이온2 서버 인증 성공")
+        except discord.HTTPException:
+            logger.exception("인증 역할 부여 실패")
+            return await finish_verification(interaction, "⚠️ 인증 역할을 부여하지 못했어요. 관리자에게 권한을 확인한 뒤 다시 시도해주세요.")
+        mark_verified(interaction.user.id, interaction.guild.id, role.id, comment["profile_url"])
+        ACTIVE_VERIFY_MESSAGES.pop((interaction.guild.id, interaction.user.id), None)
 
         nickname_changed = True
         discord_nickname = (
@@ -419,7 +373,6 @@ class VerifyCodeView(discord.ui.View):
         except (discord.Forbidden, discord.HTTPException):
             nickname_changed = False
 
-        mark_verified(interaction.user.id)
         await log_verification(
             interaction.guild,
             f"성공: {interaction.user} ({interaction.user.id}) - {discord_nickname}",
@@ -439,22 +392,10 @@ class VerifyCodeView(discord.ui.View):
             status_messages.append(f"디스코드 닉네임이 `{discord_nickname}`으로 변경됐어요.")
         else:
             status_messages.append("⚠️ 닉네임 변경 권한이 없어 디스코드 닉네임은 변경하지 못했어요.")
-        embed.description = "\n".join(status_messages)
-        await interaction.followup.send(embed=embed, ephemeral=True)
+        embed.description = "**인증이 완료되었습니다!**\n\n" + "\n".join(status_messages)
+        await finish_verification(interaction, embed=embed)
 
-        alarm_embed = discord.Embed(
-            title="🔔 알람 설정",
-            description=(
-                "원하는 보스/이벤트 알람만 선택해서 받을 수 있어요.\n"
-                "버튼을 누르면 해당 알람 역할이 부여되거나 해제돼요."
-            ),
-            color=discord.Color.gold(),
-        )
-        await interaction.followup.send(
-            embed=alarm_embed,
-            view=VerificationAlarmRoleView(),
-            ephemeral=True,
-        )
+        await send_verification_alarm_panel(interaction)
 
 
 # ---------------- Cog ----------------
@@ -466,6 +407,7 @@ class Verify(commands.Cog):
         # 영구 View 등록 (봇 재시작 후에도 버튼이 계속 작동하도록)
         bot.add_view(VerifyPanelView())
         bot.add_view(VerifyCodeView(DEFAULT_ARTICLE_URL))
+        bot.add_view(VerificationAlarmRoleView())
 
     @app_commands.command(name="인증패널생성", description="인증 센터 패널(버튼)을 이 채널에 게시합니다.")
     @app_commands.guild_only()
@@ -497,9 +439,12 @@ class Verify(commands.Cog):
             "- 인증 관련 문제가 있다면 **문의 티켓**을 열어 운영진에게 알려주세요.\n\n"
             "인증이 완료되면 통합 디스코드의 모든 채널을 이용하실 수 있어요. 많은 이용 부탁드립니다! 🙏"
         )
-        embed = discord.Embed(title=title, description=description, color=discord.Color.blue())
+        title = title.replace("브리트라", target_server)
+        description = description.replace("브리트라", target_server).replace("450", str(MIN_POWER_LEVEL))
+        embed = discord.Embed(title=title[:256], description=description[:4096], color=discord.Color.blue())
+        await interaction.response.defer(ephemeral=True, thinking=True)
         await interaction.channel.send(embed=embed, view=VerifyPanelView())
-        await interaction.response.send_message("✅ 인증 패널을 게시했어요.", ephemeral=True)
+        await interaction.followup.send("✅ 인증 패널을 게시했어요.", ephemeral=True)
 
     @app_commands.command(name="인증역할설정", description="인증 성공 시 부여할 역할을 설정합니다.")
     @app_commands.guild_only()
@@ -507,6 +452,9 @@ class Verify(commands.Cog):
     @app_commands.describe(role="부여할 역할")
     @app_commands.checks.has_permissions(administrator=True)
     async def set_role(self, interaction: discord.Interaction, role: discord.Role):
+        problem = role_error(interaction.guild, role)
+        if problem:
+            return await interaction.response.send_message(problem, ephemeral=True)
         set_guild_config(interaction.guild.id, "role_id", role.id)
         await interaction.response.send_message(
             f"✅ 인증 성공 시 `{role.name}` 역할을 부여하도록 설정했어요."
@@ -518,6 +466,9 @@ class Verify(commands.Cog):
     @app_commands.describe(server_name="게임 내 서버 이름 (예: 브리트라)")
     @app_commands.checks.has_permissions(administrator=True)
     async def set_server(self, interaction: discord.Interaction, server_name: str):
+        server_name = server_name.strip()
+        if not 1 <= len(server_name) <= 30:
+            return await interaction.response.send_message("서버 이름은 1~30자로 입력해주세요.", ephemeral=True)
         set_guild_config(interaction.guild.id, "target_server", server_name)
         await interaction.response.send_message(f"✅ 인증 대상 서버를 `{server_name}` 으로 설정했어요.")
 
@@ -527,7 +478,9 @@ class Verify(commands.Cog):
     @app_commands.describe(url="게시글 URL")
     @app_commands.checks.has_permissions(administrator=True)
     async def set_article(self, interaction: discord.Interaction, url: str):
-        set_guild_config(interaction.guild.id, "article_url", url)
+        if not aion2_scraper.is_official_url(url):
+            return await interaction.response.send_message("아이온2 공식 HTTPS 게시글 주소를 입력해주세요.", ephemeral=True)
+        set_guild_config(interaction.guild.id, "article_url", url.strip())
         await interaction.response.send_message("✅ 인증게시판 URL을 설정했어요.")
 
     async def cog_app_command_error(
@@ -536,6 +489,7 @@ class Verify(commands.Cog):
         if isinstance(error, app_commands.MissingPermissions):
             msg = "❌ 이 명령어를 실행할 권한이 없어요."
         else:
+            logger.error("인증 명령 실패", exc_info=error)
             msg = "❌ 알 수 없는 오류가 발생했어요."
         if interaction.response.is_done():
             await interaction.followup.send(msg, ephemeral=True)
