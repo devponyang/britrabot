@@ -87,7 +87,7 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
         self.guild.me.guild_permissions.manage_roles = True
         self.interaction = SimpleNamespace(guild=self.guild, user=self.member,
             edit_original_response=AsyncMock(),
-            response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock()),
+            response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock(), edit_message=AsyncMock()),
             followup=SimpleNamespace(send=AsyncMock()))
         self.comment = AsyncMock(return_value={"nickname": "test", "profile_url": "https://aion2.plaync.com/profile"})
         self.character = AsyncMock(return_value={"nickname": "test", "server": "브리트라", "power_level": 450, "class_name": "검성"})
@@ -108,6 +108,40 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
     def record(self):
         return state.get_pending_code(1, 10)
 
+    async def test_button_disabled_during_lookup_and_stays_disabled_on_success(self):
+        view = verify.VerifyCodeView()
+        async def lookup(*args):
+            rendered = self.interaction.response.edit_message.await_args.kwargs["view"]
+            self.assertTrue(rendered.check_button.disabled)
+            self.assertFalse(view.check_button.disabled)
+            return {"nickname": "test", "profile_url": "https://aion2.plaync.com/profile"}
+        self.comment.side_effect = lookup
+        await view.check_button.callback(self.interaction)
+        final_view = self.interaction.edit_original_response.await_args.kwargs["view"]
+        self.assertTrue(final_view.check_button.disabled)
+        self.assertEqual(final_view.check_button.label, "인증 완료")
+
+    async def test_failure_reenables_button(self):
+        self.comment.return_value = None
+        await self.check()
+        self.assertFalse(self.interaction.edit_original_response.await_args.kwargs["view"].check_button.disabled)
+
+    async def test_exception_reenables_button(self):
+        with patch.object(verify, "get_pending_code", side_effect=ValueError("broken state")):
+            with self.assertLogs("verify", level="ERROR"):
+                await self.check()
+        self.assertFalse(self.interaction.edit_original_response.await_args.kwargs["view"].check_button.disabled)
+
+    async def test_timeout_reenables_button_and_releases_lock(self):
+        async def lookup(*args):
+            await asyncio.Future()
+        self.comment.side_effect = lookup
+        with patch.object(verify, "VERIFY_TIMEOUT_SECONDS", 0.02), self.assertLogs("verify", level="ERROR"):
+            await self.check()
+        self.assertFalse(self.interaction.edit_original_response.await_args.kwargs["view"].check_button.disabled)
+        self.assertEqual(verify.IN_FLIGHT, set())
+        self.assertFalse(self.record()["verified"])
+
     async def test_progress_is_visible_before_lookup_and_replaced_by_success(self):
         async def lookup(*args):
             calls = self.interaction.edit_original_response.await_args_list
@@ -116,7 +150,7 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
             return {"nickname": "test", "profile_url": "https://aion2.plaync.com/profile"}
         self.comment.side_effect = lookup
         await self.check()
-        edits = self.interaction.edit_original_response.await_args_list
+        edits = [call for call in self.interaction.edit_original_response.await_args_list if "embed" in call.kwargs]
         self.assertEqual(len(edits), 2)
         self.assertEqual(edits[-1].kwargs["embed"].title, "✅ 인증 완료")
         self.interaction.followup.send.assert_not_awaited()
@@ -124,7 +158,7 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_success_sends_private_alarm_panel_after_completion(self):
         async def send(**kwargs):
             self.assertTrue(self.record()["verified"])
-            self.assertEqual(self.interaction.edit_original_response.await_args.kwargs["embed"].title, "✅ 인증 완료")
+            self.assertEqual([call for call in self.interaction.edit_original_response.await_args_list if "embed" in call.kwargs][-1].kwargs["embed"].title, "✅ 인증 완료")
             self.assertTrue(kwargs["ephemeral"])
             self.assertEqual(kwargs["embed"].title, "🔔 알람 설정")
             self.assertIn("아티쟁 전략 공유", kwargs["embed"].description)
@@ -144,7 +178,7 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
         self.interaction.followup.send.side_effect = discord.Forbidden(Mock(status=403, reason="Forbidden"), "denied")
         with patch.object(verify, "ALARM_ROLE_GUILD_ID", self.guild.id), self.assertLogs("verify", level="ERROR"):
             await self.check()
-        self.assertEqual(self.interaction.edit_original_response.await_args.kwargs["embed"].title, "✅ 인증 완료")
+        self.assertEqual([call for call in self.interaction.edit_original_response.await_args_list if "embed" in call.kwargs][-1].kwargs["embed"].title, "✅ 인증 완료")
         self.assertTrue(self.record()["verified"])
 
     async def test_alarm_buttons_toggle_their_configured_roles_independently(self):
@@ -167,7 +201,7 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_failed_lookup_replaces_progress_with_retry_guidance(self):
         self.comment.return_value = None
         await self.check()
-        edits = self.interaction.edit_original_response.await_args_list
+        edits = [call for call in self.interaction.edit_original_response.await_args_list if "embed" in call.kwargs]
         self.assertEqual(len(edits), 2)
         self.assertIn("댓글을 찾지 못했어요", edits[-1].kwargs["embed"].description)
         self.assertNotEqual(edits[-1].kwargs["embed"].title, "⏳ 인증을 진행 중입니다")
@@ -176,7 +210,7 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
         with patch.object(verify, "get_pending_code", side_effect=ValueError("broken state")):
             with self.assertLogs("verify", level="ERROR"):
                 await self.check()
-        self.assertIn("오류", self.interaction.edit_original_response.await_args.kwargs["embed"].description)
+        self.assertIn("오류", [call for call in self.interaction.edit_original_response.await_args_list if "embed" in call.kwargs][-1].kwargs["embed"].description)
 
     async def test_success_commits_only_after_role_grant(self):
         async def grant(*args, **kwargs):
@@ -263,6 +297,7 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
         await started.wait()
         await self.check()
         self.assertEqual(self.comment.await_count, 1)
+        self.interaction.response.edit_message.assert_awaited_once()
         release.set()
         await first
         self.assertEqual(verify.IN_FLIGHT, set())

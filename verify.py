@@ -17,6 +17,7 @@ CONFIG_FILE = BASE_DIR / "verify_config.json"
 logger = logging.getLogger(__name__)
 IN_FLIGHT = set()
 VERIFY_SLOTS = asyncio.Semaphore(3)
+VERIFY_TIMEOUT_SECONDS = 180
 
 LEGACY_ARTICLE_URL = (
     "https://aion2.plaync.com/ko-kr/board/server/view"
@@ -80,27 +81,60 @@ def verification_request(callback):
     async def guarded(self, interaction, button):
         if interaction.guild is None:
             return await interaction.response.send_message("서버 안에서 이용해주세요.", ephemeral=True)
-        await interaction.response.defer(ephemeral=True, thinking=True)
         key = (interaction.guild.id, interaction.user.id)
         if key in IN_FLIGHT:
-            return await interaction.followup.send("⏳ 이미 인증을 처리 중이에요. 결과를 기다려주세요.", ephemeral=True)
+            return await interaction.response.send_message("⏳ 이미 인증을 처리 중이에요. 결과를 기다려주세요.", ephemeral=True)
+        # Acquire before the first network await, including the button update.
         IN_FLIGHT.add(key)
         checking = button.custom_id == "verify:check"
+        request_view = None
+        acknowledged = False
+        completed = False
         try:
             if checking:
+                # Never mutate the shared persistent view: each message gets its own view.
+                article_url = next(child.url for child in self.children if child.url)
+                request_view = VerifyCodeView(article_url)
+                request_view.check_button.disabled = True
+                request_view.check_button.label = "인증 확인 중…"
+                await interaction.response.edit_message(view=request_view)
+                acknowledged = True
                 await interaction.edit_original_response(content=None, embed=build_verification_progress_embed())
-            async with asyncio.timeout(180):
+            else:
+                await interaction.response.defer(ephemeral=True, thinking=True)
+                acknowledged = True
+            async with asyncio.timeout(VERIFY_TIMEOUT_SECONDS):
                 async with VERIFY_SLOTS:
-                    return await callback(self, interaction, button)
+                    result = await callback(self, interaction, button)
+                    completed = result is True
+                    return result
+        except asyncio.CancelledError:
+            if checking and acknowledged:
+                try:
+                    await finish_verification(interaction, "⚠️ 인증 처리가 중단됐어요. 잠시 후 다시 시도해주세요.")
+                except discord.HTTPException:
+                    logger.exception("인증 중단 안내 전송 실패")
+            raise
         except Exception:
             logger.exception("인증 처리 실패: guild=%s user=%s", *key)
             message = "⚠️ 인증 처리 중 오류가 발생했어요. 잠시 후 다시 시도해주세요. 실패 횟수는 추가되지 않아요."
-            if checking:
+            if checking and acknowledged:
                 await finish_verification(interaction, message)
-            else:
+            elif acknowledged:
                 await interaction.followup.send(message, ephemeral=True)
+            else:
+                await interaction.response.send_message(message, ephemeral=True)
         finally:
-            IN_FLIGHT.discard(key)
+            try:
+                if request_view is not None and acknowledged:
+                    request_view.check_button.disabled = completed
+                    request_view.check_button.label = "인증 완료" if completed else "댓글 작성 완료 (다음)"
+                    try:
+                        await interaction.edit_original_response(view=request_view)
+                    except discord.HTTPException:
+                        logger.exception("인증 버튼 상태 갱신 실패: user=%s", interaction.user.id)
+            finally:
+                IN_FLIGHT.discard(key)
     return guarded
 
 
@@ -158,7 +192,8 @@ class VerifyPanelView(SafeView):
         config = get_guild_config(interaction.guild.id)
         if is_verified(pending, config, interaction.user):
             await interaction.followup.send("✅ 이미 인증된 사용자예요.", ephemeral=True)
-            return await send_verification_alarm_panel(interaction)
+            await send_verification_alarm_panel(interaction)
+            return True
         cooldown = get_cooldown_remaining(interaction.user.id, interaction.guild.id)
         if cooldown:
             return await interaction.followup.send(
@@ -175,6 +210,7 @@ class VerifyPanelView(SafeView):
         embed.description = (
             "아래 인증 코드를 복사하여 홈페이지 인증게시판에 댓글로 작성해주세요.\n"
             "대표 캐릭터를 반드시 확인 부탁드립니다.\n\n"
+            "**댓글 작성 완료 버튼은 한 번만 눌러주세요.** 인증 중에는 비활성화되며, 실패하면 다시 사용할 수 있어요.\n\n"
             "댓글 작성이 완료되면 아래의 **댓글 작성 완료 (다음)** 버튼을 눌러주세요."
         )
         embed.add_field(name="🔑 발급된 인증 코드 (30분 유효)", value=f"`{code}`", inline=False)
@@ -292,7 +328,8 @@ class VerifyCodeView(SafeView):
         config = get_guild_config(interaction.guild.id)
         if is_verified(pending, config, interaction.user):
             await finish_verification(interaction, "✅ 이미 인증된 사용자예요.")
-            return await send_verification_alarm_panel(interaction)
+            await send_verification_alarm_panel(interaction)
+            return True
         cooldown = get_cooldown_remaining(interaction.user.id, interaction.guild.id)
         if cooldown:
             return await finish_verification(interaction,
@@ -396,6 +433,7 @@ class VerifyCodeView(SafeView):
         await finish_verification(interaction, embed=embed)
 
         await send_verification_alarm_panel(interaction)
+        return True
 
 
 # ---------------- Cog ----------------
@@ -432,6 +470,9 @@ class Verify(commands.Cog):
             "> ⚠️ 반드시 **브리트라 서버의 대표 캐릭터**로 댓글을 작성해주세요. (다른 서버 캐릭터 또는 전투력 450 미만 캐릭터는 인증이 통과되지 않아요)\n"
             "**4️⃣** 댓글 작성 후 **[댓글 작성 완료]** 버튼을 눌러주세요. 봇이 자동으로 확인 후 역할을 부여해드려요. 사용량에 따라 역할 부여에는 최대 2분이상 소요 될 수도 있습니다.\n\n"
             "## ❗ 주의사항\n"
+            "- **댓글 작성 완료 버튼은 한 번만 눌러주세요.** 인증 중에는 버튼이 비활성화됩니다.\n"
+            "- 최대 3분 동안 결과를 기다려주세요. 실패 안내가 나오면 버튼이 다시 활성화됩니다.\n"
+            "- 실패 3회로 대기시간이 적용된 경우에는 안내된 시간이 지난 뒤 재시도해주세요.\n"
             "- 인증 코드는 **본인만** 사용할 수 있으며, 타인에게 공유하지 마세요.\n"
             "- 브리트라 서버 캐릭터가 아니거나 전투력이 450 미만일 경우 인증이 통과되지 않아요.\n"
             "- 댓글을 작성했는데도 인증이 안 된다면, 댓글이 실제로 게시됐는지 새로고침해서 확인 후 다시 시도해주세요.\n"
