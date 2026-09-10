@@ -187,9 +187,10 @@ class VerifyPanelView(discord.ui.View):
         previous_message = ACTIVE_VERIFY_MESSAGES.get(message_key)
         if previous_message:
             try:
-                await previous_message.edit(embed=embed, view=message_view)
-                return
-            except (discord.NotFound, discord.HTTPException):
+                await previous_message.delete()
+            except discord.DiscordException:
+                pass
+            finally:
                 ACTIVE_VERIFY_MESSAGES.pop(message_key, None)
 
         message = await interaction.followup.send(
