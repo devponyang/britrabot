@@ -25,6 +25,7 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         self.channel.id = 50
         self.channel.send = AsyncMock()
         self.guild = Mock(id=a.OFFICIAL_NOTICE_GUILD_ID)
+        self.guild.get_role.return_value = Mock(id=123, mention="<@&123>")
         self.guild.get_channel.return_value = self.channel
         self.bot = Mock(guilds=[self.guild])
         self.cog = a.Automation(self.bot)

@@ -25,6 +25,7 @@ logger = logging.getLogger("bot")
 # (Bot 설정 > Privileged Gateway Intents > SERVER MEMBERS INTENT, MESSAGE CONTENT INTENT)
 intents = discord.Intents.default()
 intents.members = True
+intents.voice_states = True
 intents.message_content = True
 
 class ServerBot(commands.Bot):

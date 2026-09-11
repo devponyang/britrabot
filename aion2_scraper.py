@@ -1,6 +1,7 @@
 """아이온2 공식 게시판/캐릭터 및 아툴 통계를 비동기로 조회합니다."""
 
 import asyncio
+import datetime
 import re
 import logging
 from contextlib import asynccontextmanager
@@ -146,42 +147,53 @@ async def get_latest_official_articles(limit: int = 10) -> list[dict]:
 
 @background_scrape
 async def get_latest_artifact_result(expected_date=None) -> dict | None:
-    """아툴에서 최근 집계 완료된 아티팩트쟁 결과를 가져옵니다."""
+    """Read completion, score and date from the SAME current matchup card."""
     if DUMMY_MODE:
         return None
-
     async with browser_page() as page:
         await page.goto(ARTIFACT_RESULT_URL, wait_until="domcontentloaded", timeout=30000)
-        body_text = ""
-        for _ in range(15):
-            body_text = re.sub(r"\s+", " ", await page.locator("body").inner_text()).strip()
-            if "결과 집계완료" in body_text:
-                break
-            await page.wait_for_timeout(1000)
-        completed = re.findall(
-            r"✅\s*(\d+월\s*\d+일\s*\(\d+차전\))\s*결과 집계완료", body_text
-        )
-        if not completed:
-            return None
-
-        date_match = re.search(r"(\d+)월\s*(\d+)일", completed[0])
-        if expected_date and date_match:
-            result_month, result_day = map(int, date_match.groups())
-            if (result_month, result_day) != (expected_date.month, expected_date.day):
+        await page.locator(".artifact-match-card").first.wait_for(timeout=20000)
+        cards = await page.locator(".artifact-match-card").all_inner_texts()
+        for text in cards:
+            body_text = re.sub(r"\s+", " ", text).strip()
+            record = parse_breitra_artifact_result(body_text)
+            if record is None:
+                continue
+            completion = re.search(r"✅\s*(\d+월\s*\d+일\s*\(\d+차전\))\s*결과 집계완료", body_text)
+            if not completion:
                 return None
+            result = {"completion": completion.group(1), "record": record, "url": ARTIFACT_RESULT_URL}
+            if expected_date and artifact_result_date(result, expected_date) != expected_date:
+                return None
+            record["territories"] = await get_breitra_territory_results(page, record["left_server"], record["right_server"])
+            return result
+        return None
 
-        breitra_record = parse_breitra_artifact_result(body_text)
-        if breitra_record is None:
-            return None
-        breitra_record["territories"] = await get_breitra_territory_results(
-            page, breitra_record["left_server"], breitra_record["right_server"]
-        )
 
-        return {
-            "completion": completed[0],
-            "record": breitra_record,
-            "url": ARTIFACT_RESULT_URL,
-        }
+def artifact_result_date(result, reference=None) -> datetime.date:
+    reference = reference or datetime.datetime.now(datetime.timezone(datetime.timedelta(hours=9))).date()
+    match = re.search(r"(\d+)월\s*(\d+)일", result["completion"])
+    if not match:
+        raise ValueError("Artifact completion has no date")
+    month, day = map(int, match.groups())
+    year = reference.year - (1 if month > reference.month else 0)
+    return datetime.date(year, month, day)
+
+
+def artifact_history_from_result(result, reference=None):
+    record = result["record"]
+    date = artifact_result_date(result, reference)
+    opponent = record["opponent_server"]
+    return {
+        "pair": f"브리트라 VS {opponent}", "source_url": result["url"],
+        "records": [{"date": date.isoformat(), "time": "22:00", "round": record["round"],
+                     "scores": [f"{record['breitra_round']}:{record['opponent_round']}"],
+                     "cells": [], "images": [], "source": "current_match_card"}],
+        "record": {"url": result["url"], "opponent_server": opponent,
+                   "breitra_capture_count": None, "opponent_capture_count": None,
+                   "completion": result["completion"], "matchup": {key: record[key] for key in (
+                       "round", "breitra_result", "opponent_result", "breitra_round", "opponent_round", "breitra_total", "opponent_total")}},
+    }
 
 
 @background_scrape
@@ -199,10 +211,12 @@ async def get_artifact_server_record(opponent_server: str) -> dict | None:
                 break
             await page.wait_for_timeout(1000)
 
-        record = parse_artifact_server_record(body_text.replace("브리 트라", "브리트라"), opponent_server)
-        if record is None:
-            return None
-        return record | {"url": ARTIFACT_RESULT_URL}
+        for text in await page.locator(".artifact-match-card").all_inner_texts():
+            card_text = re.sub(r"\s+", " ", text).strip().replace("브리 트라", "브리트라")
+            record = parse_artifact_server_record(card_text, opponent_server)
+            if record:
+                return record | {"url": ARTIFACT_RESULT_URL}
+        return None
 
 
 @background_scrape
@@ -216,29 +230,24 @@ async def get_artifact_server_history(opponent_server: str) -> dict | None:
         body_text = ""
         for _ in range(15):
             body_text = re.sub(r"\s+", " ", await page.locator("body").inner_text()).strip()
-            if opponent_server in body_text and "기록 보기" in body_text:
+            if opponent_server in body_text and "기록" in body_text:
                 break
             await page.wait_for_timeout(1000)
 
         if parse_artifact_server_record(body_text.replace("브리 트라", "브리트라"), opponent_server) is None:
             return None
 
-        record_buttons = page.get_by_text("기록 보기", exact=True)
-        target = None
-        target_text_length = None
-        for index in range(await record_buttons.count()):
-            candidate = record_buttons.nth(index)
-            ancestor = candidate
-            for _ in range(8):
-                text = (await ancestor.inner_text()).strip()
-                if "브리트라" in text.replace("브리 트라", "브리트라") and opponent_server in text:
-                    if target_text_length is None or len(text) < target_text_length:
-                        target = candidate
-                        target_text_length = len(text)
-                ancestor = ancestor.locator("..")
-
-        if target is None:
+        target_card = None
+        cards = page.locator(".artifact-match-card")
+        for index in range(await cards.count()):
+            text = re.sub(r"\s+", " ", await cards.nth(index).inner_text()).strip()
+            current = parse_breitra_artifact_result(text)
+            if current and current["opponent_server"] == opponent_server:
+                target_card = cards.nth(index)
+                break
+        if target_card is None:
             return None
+        target = target_card.get_by_text(re.compile(r"^(?:과거\s*)?기록\s*보기$"))
         await target.click()
         await page.locator("table tr").filter(has_text=re.compile(r"\d{4}-\d{2}-\d{2}")).first.wait_for(timeout=10000)
 
@@ -250,9 +259,15 @@ async def get_artifact_server_history(opponent_server: str) -> dict | None:
                 }))
             }))"""
         )
+        records = parse_artifact_history_rows(rows)
+        if current and current["left_server"] != "브리트라":
+            for item in records:
+                item["scores"] = [":".join(reversed(score.split(":"))) for score in item["scores"]]
+                if item.get("total_score"):
+                    item["total_score"] = ":".join(reversed(item["total_score"].split(":")))
         return {
             "pair": f"브리트라 VS {opponent_server}",
-            "records": parse_artifact_history_rows(rows),
+            "records": records,
             "source_url": page.url,
         }
 
@@ -273,7 +288,9 @@ def parse_artifact_history_rows(rows: list[dict]) -> list[dict]:
             {
                 "date": date_match.group(1),
                 "round": date_match.group(2),
-                "scores": scores,
+                "scores": scores[:1],
+                "total_score": scores[1] if len(scores) > 1 else None,
+                "time": "22:00",
                 "cells": cell_texts,
                 "images": images,
             }
@@ -380,8 +397,8 @@ async def get_breitra_territory_results(page, left_server: str, right_server: st
             const normalize = value => (value || '').replace(/\\s+/g, '');
             return Array.from(document.querySelectorAll('.artifact-layers-row'))
                 .flatMap(row => {
-                    let card = row;
-                    for (let index = 0; index < 10 && card; index += 1, card = card.parentElement) {
+                    const card = row.closest('.artifact-match-card');
+                    if (card) {
                         const text = normalize(card.innerText);
                         if (text.includes(normalize(leftServer)) &&
                             text.includes(normalize(rightServer)) &&

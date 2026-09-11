@@ -1,6 +1,7 @@
 import asyncio
 from functools import wraps
 import logging
+import time
 import os
 import datetime
 
@@ -12,7 +13,7 @@ import aion2_scraper
 import verify
 from storage import load_json, save_json
 from alarm_settings import ALARM_ROLE_GUILD_ID, ALARM_ROLE_IDS, ALARM_ROLE_GROUPS
-from discord_helpers import SafeView, SafeModal, open_ticket, TicketCloseView, toggle_role, purge_messages, send_embed_pages
+from discord_helpers import SafeView, SafeModal, open_ticket, TicketCloseView, toggle_role, purge_messages, send_embed_pages, embed_text
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,7 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CONFIG_FILE = os.path.join(BASE_DIR, "guild_config.json")
 ARTIFACT_RECORDS_FILE = os.path.join(BASE_DIR, "artifact_records.json")
 OFFICIAL_NOTICE_GUILD_ID = 1545016047332237332
+ARTIFACT_RESULT_CHANNEL_ID = 1547489396301762640
 OFFICIAL_NOTICE_CHANNEL_IDS = {
     "공지": 1546379509513723905,
     "이벤트": 1547049610021965854,
@@ -33,8 +35,8 @@ ALARM_SCHEDULE = (
     ("나흐마", {0, 4}, ((22, 0),), (30, 10)),
     ("시공쟁탈전", {0, 3, 5}, ((20, 0), (23, 0)), (30, 10)),
     ("어비스 균열지대", {1, 3}, ((22, 0),), (30, 10)),
-    ("아티팩트쟁", {2, 5}, tuple((hour, 0) for hour in range(16, 23)), ()),
-    ("어비스 필드보스", {2, 5}, ((22, 30),), ()),
+    ("아티팩트쟁", {2, 5}, ((22, 0),), (30, 10)),
+    ("어비스 필드보스", {2, 5}, ((22, 30),), (10,)),
 )
 
 EVENT_NAMES = [name for name, *_ in ALARM_SCHEDULE]
@@ -62,10 +64,6 @@ def get_due_alarm_messages(now: datetime.datetime) -> list[tuple[str, str]]:
             else:
                 continue
 
-            if name == "아티팩트쟁" and (hour, minute) == (22, 0):
-                label = "아티팩트쟁 + 어비스 필드보스 알람 (아티팩트쟁 22:00 / 필드보스 22:30)"
-            elif name == "어비스 필드보스":
-                label = "아티팩트쟁 + 어비스 필드보스 알람 (필드보스 22:30)"
             due.append((f"{name}:{hour:02d}:{minute:02d}:{minutes_before}", label))
     return due
 
@@ -82,24 +80,41 @@ ALARM_STYLE = {
 DEFAULT_ALARM_STYLE = {"emoji": "🔔", "color": discord.Color.blurple()}
 
 
-def build_alarm_embed(alarm_message: str, schedule_key: str, custom_text: str | None = None) -> discord.Embed:
-    """알람 메시지를 이벤트에 맞는 이모지/색상의 임베드로 꾸며줍니다."""
-    event_name = schedule_key.split(":", 1)[0]
-    minutes_before = int(schedule_key.rsplit(":", 1)[1])
+def build_alarm_embed(alarm_message: str, schedule_key: str, custom_text: str | None = None,
+                      *, alarm_time=None, now=None) -> discord.Embed:
+    event_name, hour, minute, lead = schedule_key.rsplit(":", 3)
+    now = now or datetime.datetime.now(KST)
+    alarm_time = alarm_time or now
+    scheduled = alarm_time.replace(hour=int(hour), minute=int(minute), second=0, microsecond=0)
+    minutes_before = int(lead)
     style = ALARM_STYLE.get(event_name, DEFAULT_ALARM_STYLE)
-
-    status = "🚨 지금 시작!" if minutes_before == 0 else f"⏰ {minutes_before}분 전!"
-
+    delayed = now.replace(second=0, microsecond=0) > alarm_time.replace(second=0, microsecond=0)
+    phase = "시작 시각" if minutes_before == 0 else f"{minutes_before}분 전"
+    if delayed:
+        phase = "지연 안내"
+    instructions = (
+        "예정된 시작 시각입니다. 게임 내 진행 상황을 확인하고 참여해주세요."
+        if now >= scheduled else
+        "곧 시작합니다. 참여할 캐릭터와 준비물을 확인해주세요."
+        if (scheduled - now).total_seconds() <= 600 else
+        "참여 일정을 미리 확인해주세요. 시작 10분 전에 다시 안내합니다."
+    )
     embed = discord.Embed(
-        title=f"{style['emoji']} {alarm_message}",
-        description=f"## {status}",
-        color=style["color"],
-        timestamp=datetime.datetime.now(KST),
+        title=f"{style['emoji']} {event_name} · {phase}",
+        description=f"**시작:** <t:{int(scheduled.timestamp())}:f> (<t:{int(scheduled.timestamp())}:R>)\n{instructions}",
+        color=style["color"], timestamp=scheduled,
     )
     if custom_text:
-        embed.add_field(name="📋 안내", value=custom_text, inline=False)
-    embed.set_footer(text="놓치지 말고 참여하세요! 🙌")
+        embed.add_field(name="운영진 안내", value=custom_text[:1024], inline=False)
+    if event_name == "아티팩트쟁":
+        embed.add_field(name="참여 안내", value="전략 공유 권한은 알람 설정의 **어비스** 버튼에서 받을 수 있어요.", inline=False)
+    embed.set_footer(text="한국 시간(KST) 기준 · 게임 내 공지 우선" + (" · 누락 알림 지연 전달" if delayed else ""))
     return embed
+
+
+def should_ping_alarm(mode: str, schedule_key: str) -> bool:
+    lead = int(schedule_key.rsplit(":", 1)[1])
+    return mode == "all" or (mode == "start" and lead == 0) or (mode == "important" and lead in (0, 10))
 
 
 def load_config() -> dict:
@@ -124,7 +139,7 @@ def set_guild_config(guild_id: int, key: str, value):
 def save_artifact_history(history: dict):
     """서버 쌍별 아티팩트 상세 기록을 JSON으로 누적 저장합니다."""
     data = load_json(ARTIFACT_RECORDS_FILE)
-    previous = data.get(history["pair"], {})
+    previous = data.get(history["pair"]) or load_artifact_history(history["pair"]) or {}
     records = {(item["date"], item["round"]): item for item in previous.get("records", [])}
     records.update({(item["date"], item["round"]): item for item in history["records"]})
     saved_history = {
@@ -134,7 +149,7 @@ def save_artifact_history(history: dict):
         "records": sorted(records.values(), key=lambda item: (item["date"], item["round"])),
     }
     if history.get("record"):
-        saved_history["record"] = history["record"]
+        saved_history["record"] = {**previous.get("record", {}), **{key: value for key, value in history["record"].items() if value is not None or key not in previous.get("record", {})}}
     data[history["pair"]] = saved_history
     save_json(ARTIFACT_RECORDS_FILE, data)
 
@@ -231,6 +246,39 @@ def load_artifact_chapter_matchups(pair: str) -> list[dict]:
                 score = ":".join(reversed(score.split(":")))
             matchups.append({"chapter": chapter, "matchup": pair, "score": score})
     return matchups
+
+
+def latest_saved_artifact_opponent():
+    candidates = []
+    for pair, history in load_json(ARTIFACT_RECORDS_FILE).items():
+        servers = pair.split(" VS ")
+        if len(servers) != 2 or "브리트라" not in servers:
+            continue
+        latest = max((row.get("date", "") for row in history.get("records", [])), default="")
+        if latest:
+            candidates.append((latest, servers[1] if servers[0] == "브리트라" else servers[0]))
+    return max(candidates)[1] if candidates else None
+
+
+def build_artifact_history_embed(opponent, history, *, live=False):
+    records = sorted(history.get("records", []), key=lambda item: (item.get("date", ""), item.get("time", "22:00")), reverse=True)
+    summary = history.get("record") or {}
+    embed = discord.Embed(title=f"🏺 아티팩트 전적 · 브리트라 vs {opponent}",
+                          url=summary.get("url") or history.get("source_url") or None, color=discord.Color.gold())
+    embed.description = "최신 집계 결과를 확인했습니다." if live else "저장된 기록입니다. 실시간 집계와 차이가 있을 수 있어요."
+    if records:
+        latest = records[0]
+        embed.add_field(name=f"최근 경기 · {latest['date']} {latest.get('time', '22:00')} (KST) · {latest['round']}",
+                        value=f"브리트라 : {opponent} = **{(latest.get('scores') or ['확인 불가'])[0]}**", inline=False)
+        lines = [f"{item['date']} {item.get('time', '22:00')} · {item['round']} · **{(item.get('scores') or ['확인 불가'])[0]}**" for item in records]
+        embed.add_field(name="회차별 결과 (브리트라 : 상대)", value="\n".join(lines), inline=False)
+    else:
+        embed.add_field(name="회차별 결과", value="상세 기록이 아직 없습니다.", inline=False)
+    matchup = summary.get("matchup")
+    if matchup:
+        embed.add_field(name="원본의 현재 매칭 누적 점수", value=f"**{matchup['breitra_total']} : {matchup['opponent_total']}**", inline=False)
+    embed.set_footer(text=f"아툴 비공식 통계 · 저장 시각 {history.get('updated_at', '알 수 없음')} · 과거 상대는 /아티확인 server 입력")
+    return embed
 
 
 class AlarmMessageModal(SafeModal):
@@ -379,7 +427,7 @@ class AdminPanelChannelSelect(discord.ui.ChannelSelect):
             return
         channel = self.values[0]
         set_guild_config(interaction.guild.id, self.setting_key, channel.id)
-        await interaction.response.edit_message(embed=build_admin_panel_embed(interaction.guild), view=self.view)
+        await interaction.response.edit_message(content=embed_text(build_admin_panel_embed(interaction.guild)), embed=build_admin_panel_embed(interaction.guild), view=self.view)
         await interaction.followup.send(f"✅ {self.label} 채널을 {channel.mention} 으로 설정했어요.", ephemeral=True)
 
 
@@ -399,7 +447,7 @@ class AdminPanelRoleSelect(discord.ui.RoleSelect):
             return
         role = self.values[0]
         set_guild_config(interaction.guild.id, "alarm_ping_role", role.id)
-        await interaction.response.edit_message(embed=build_admin_panel_embed(interaction.guild), view=self.view)
+        await interaction.response.edit_message(content=embed_text(build_admin_panel_embed(interaction.guild)), embed=build_admin_panel_embed(interaction.guild), view=self.view)
         await interaction.followup.send(f"✅ 알람 멘션 역할을 {role.mention} 으로 설정했어요.", ephemeral=True)
 
 
@@ -472,7 +520,7 @@ class VerificationRoleSelect(discord.ui.RoleSelect):
         if problem:
             return await interaction.response.send_message(problem, ephemeral=True)
         verify.set_guild_config(interaction.guild.id, "role_id", role.id)
-        await interaction.response.edit_message(embed=build_verification_admin_embed(interaction.guild), view=self.view)
+        await interaction.response.edit_message(content=embed_text(build_verification_admin_embed(interaction.guild)), embed=build_verification_admin_embed(interaction.guild), view=self.view)
         await interaction.followup.send(f"✅ 인증 완료 역할을 {role.mention} 으로 설정했어요.", ephemeral=True)
 
 
@@ -529,7 +577,7 @@ class VerificationAdminView(SafeView):
             color=discord.Color.blue(),
         )
         await interaction.response.defer(ephemeral=True, thinking=True)
-        await interaction.channel.send(embed=embed, view=verify.VerifyPanelView())
+        await interaction.channel.send(content=embed_text(embed), embed=embed, view=verify.VerifyPanelView())
         await interaction.followup.send(
             f"✅ 인증 패널을 게시했어요. 대상 서버: **{config['target_server']}**", ephemeral=True
         )
@@ -557,7 +605,7 @@ class AdminPanelView(SafeView):
 
     @discord.ui.button(label="인증 관리", style=discord.ButtonStyle.primary, custom_id="adminpanel:verify_open", row=2)
     async def verification_admin(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(embed=build_verification_admin_embed(interaction.guild), view=VerificationAdminView(), ephemeral=True)
+        await interaction.response.send_message(content=embed_text(build_verification_admin_embed(interaction.guild)), embed=build_verification_admin_embed(interaction.guild), view=VerificationAdminView(), ephemeral=True)
 
     @discord.ui.button(label="아티팩트 상대 서버", style=discord.ButtonStyle.secondary, emoji="🏺", custom_id="adminpanel:artifact_opponent", row=4)
     async def set_artifact_opponent(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -571,13 +619,13 @@ class AdminPanelView(SafeView):
             color=discord.Color.blurple(),
         )
         await interaction.response.defer(ephemeral=True, thinking=True)
-        await interaction.channel.send(embed=embed, view=AlarmMessagePanelView())
+        await interaction.channel.send(content=embed_text(embed), embed=embed, view=AlarmMessagePanelView())
         await interaction.followup.send("✅ 알람 문구 패널을 게시했어요.", ephemeral=True)
 
 
     @discord.ui.button(label="설정 새로고침", style=discord.ButtonStyle.secondary, emoji="🔄", custom_id="adminpanel:refresh", row=4)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(embed=build_admin_panel_embed(interaction.guild), view=self)
+        await interaction.response.edit_message(content=embed_text(build_admin_panel_embed(interaction.guild)), embed=build_admin_panel_embed(interaction.guild), view=self)
 
 
 class TicketView(SafeView):
@@ -611,6 +659,9 @@ class Automation(commands.Cog):
         self.bot = bot
         self._background_tasks = []
         self._artifact_sync_lock = asyncio.Lock()
+        self._latest_result_lock = asyncio.Lock()
+        self._latest_result_checked_at = -1000
+        self._latest_result = None
         bot.add_view(TicketView())
         bot.add_view(TicketCloseView())
         bot.add_view(AlarmMessagePanelView())
@@ -655,7 +706,7 @@ class Automation(commands.Cog):
             try:
                 message = await channel.fetch_message(message_id)
                 await message.edit(
-                    embed=build_admin_panel_embed(guild),
+                    content=embed_text(build_admin_panel_embed(guild)), embed=build_admin_panel_embed(guild),
                     view=AdminPanelView(),
                 )
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
@@ -686,13 +737,13 @@ class Automation(commands.Cog):
         if message_id:
             try:
                 message = await channel.fetch_message(message_id)
-                await message.edit(embed=embed, view=AlarmRolePanelView())
+                await message.edit(content=embed_text(embed), embed=embed, view=AlarmRolePanelView())
                 return
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 pass
 
         try:
-            message = await channel.send(embed=embed, view=AlarmRolePanelView())
+            message = await channel.send(content=embed_text(embed), embed=embed, view=AlarmRolePanelView())
         except (discord.Forbidden, discord.HTTPException):
             logger.exception("알람 역할 패널 게시 실패: channel=%s", ALARM_ROLE_CHANNEL_ID)
             return
@@ -711,13 +762,34 @@ class Automation(commands.Cog):
         async with self._artifact_sync_lock:
             await self._sync_artifact_records_unlocked()
 
+    async def _refresh_latest_result(self):
+        async with self._latest_result_lock:
+            if time.monotonic() - self._latest_result_checked_at < 120:
+                return self._latest_result
+            try:
+                async with asyncio.timeout(40):
+                    result = await aion2_scraper.get_latest_artifact_result()
+                if result:
+                    save_artifact_history(aion2_scraper.artifact_history_from_result(result))
+                self._latest_result = result
+                return result
+            except Exception:
+                logger.exception("최신 아티팩트 매칭 조회 실패: 저장 기록 사용")
+                self._latest_result = None
+                return None
+            finally:
+                self._latest_result_checked_at = time.monotonic()
+
     async def _sync_artifact_records_unlocked(self):
+        latest = await self._refresh_latest_result()
         opponents = {
             config.get("artifact_opponent_server")
             for guild in self.bot.guilds
             for config in [get_guild_config(guild.id)]
             if config.get("artifact_opponent_server")
         }
+        if latest:
+            opponents.add(latest["record"]["opponent_server"])
         for opponent_server in opponents:
             try:
                 history = await aion2_scraper.get_artifact_server_history(opponent_server)
@@ -766,7 +838,7 @@ class Automation(commands.Cog):
                                       color=discord.Color.blurple(), timestamp=datetime.datetime.now(KST))
                 embed.set_footer(text="AION2 공식 홈페이지")
                 try:
-                    await channel.send(embed=embed)
+                    await channel.send(content=embed_text(embed), embed=embed)
                 except discord.HTTPException:
                     logger.exception("공지 전송 실패: guild=%s category=%s", guild.id, category)
                     continue
@@ -808,19 +880,18 @@ class Automation(commands.Cog):
                 try:
                     event_name = schedule_key.split(":", 1)[0]
                     embed = build_alarm_embed(
-                        alarm_message, schedule_key, custom_messages.get(event_name)
+                        alarm_message, schedule_key, custom_messages.get(event_name), alarm_time=alarm_time, now=now
                     )
-                    if alarm_time < now.replace(second=0, microsecond=0):
-                        embed.set_footer(text=f"{alarm_time:%H:%M} 예정 알림 · 지연 전달")
                     if guild.id == ALARM_ROLE_GUILD_ID:
                         ping_role = get_alarm_role(guild, event_name)
                     else:
                         ping_role = default_ping_role
-                    content = ping_role.mention if ping_role else None
+                    ping = ping_role if should_ping_alarm(guild_config.get("alarm_ping_mode", "important"), schedule_key) else None
+                    content = ((ping.mention + "\n") if ping else "") + embed_text(embed)
                     await channel.send(
                         content=content,
                         embed=embed,
-                        allowed_mentions=discord.AllowedMentions(roles=True),
+                        allowed_mentions=discord.AllowedMentions(everyone=False, users=False, roles=[ping] if ping else []),
                     )
                     sent.append(alarm_key)
                     sent = sent[-500:]
@@ -859,12 +930,13 @@ class Automation(commands.Cog):
             return
         if not result:
             return
+        save_artifact_history(aion2_scraper.artifact_history_from_result(result, expected_date))
 
         result_saved = False
         for guild in self.bot.guilds:
             config = get_guild_config(guild.id)
             if guild.id == OFFICIAL_NOTICE_GUILD_ID:
-                channel_id = OFFICIAL_NOTICE_CHANNEL_IDS["기타"]
+                channel_id = ARTIFACT_RESULT_CHANNEL_ID
             else:
                 channel_id = config.get("alarm_channel")
             channel = guild.get_channel(channel_id) if channel_id else None
@@ -885,10 +957,10 @@ class Automation(commands.Cog):
             record = result.get("record")
             if record:
                 embed.add_field(
-                    name="아티쟁 결과",
+                    name="이번 회차 결과",
                     value=(
-                        f"브리트라 **{record['breitra_total']}** : "
-                        f"**{record['opponent_total']}** {record['opponent_server']}"
+                        f"브리트라 **{record['breitra_round']}** : "
+                        f"**{record['opponent_round']}** {record['opponent_server']}"
                     ),
                     inline=False,
                 )
@@ -912,7 +984,7 @@ class Automation(commands.Cog):
                     )
             embed.set_footer(text="아툴 비공식 참고용 통계 · 원본 보기")
             try:
-                await channel.send(embed=embed)
+                await channel.send(content=embed_text(embed), embed=embed)
                 set_guild_config(guild.id, "sent_artifact_result_keys", (sent + [result_key])[-100:])
                 result_saved = True
             except discord.HTTPException:
@@ -933,6 +1005,38 @@ class Automation(commands.Cog):
             f"✅ 게임 일정 알람 채널을 {channel.mention} 으로 설정했어요."
         )
 
+    @app_commands.command(name="알람멘션설정", description="게임 알람에서 역할 멘션을 보낼 시점을 정합니다.")
+    @app_commands.guild_only()
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.choices(mode=[
+        app_commands.Choice(name="10분 전과 시작 (기본)", value="important"),
+        app_commands.Choice(name="시작에만", value="start"),
+        app_commands.Choice(name="모든 알람", value="all"),
+        app_commands.Choice(name="멘션 없이 안내만", value="none"),
+    ])
+    async def alarm_ping_mode(self, interaction: discord.Interaction, mode: app_commands.Choice[str]):
+        set_guild_config(interaction.guild.id, "alarm_ping_mode", mode.value)
+        await interaction.response.send_message(f"✅ 알람 멘션 방식을 **{mode.name}**으로 설정했어요.", ephemeral=True)
+
+    @app_commands.command(name="다음알람", description="앞으로 예정된 게임 일정 5개를 확인합니다.")
+    @app_commands.guild_only()
+    async def upcoming_alarms(self, interaction: discord.Interaction):
+        now = datetime.datetime.now(KST)
+        upcoming = []
+        for day in range(8):
+            date = now + datetime.timedelta(days=day)
+            for name, weekdays, times, _ in ALARM_SCHEDULE:
+                if date.weekday() in weekdays:
+                    for hour, minute in times:
+                        scheduled = date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+                        if scheduled > now:
+                            upcoming.append((scheduled, name))
+        embed = discord.Embed(title="📅 다음 게임 일정", color=discord.Color.blurple())
+        embed.description = "\n".join(f"**{name}** · <t:{int(when.timestamp())}:f> (<t:{int(when.timestamp())}:R>)" for when, name in sorted(upcoming)[:5])
+        embed.set_footer(text="한국 시간(KST) 기준 · 게임 내 공지 우선")
+        await interaction.response.send_message(content=embed_text(embed), embed=embed, ephemeral=True)
+
     @app_commands.command(name="아티설정", description="브리트라의 아티팩트쟁 상대 서버를 설정합니다.")
     @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)
@@ -950,19 +1054,24 @@ class Automation(commands.Cog):
             f"✅ 아티팩트쟁 상대 서버를 **{server}**로 설정했어요."
         )
 
-    @app_commands.command(name="아티확인", description="브리트라와 설정한 상대 서버의 아티팩트 전적을 확인합니다.")
+    @app_commands.command(name="아티확인", description="최신 아티팩트 매칭 또는 지정한 과거 상대의 전적을 확인합니다.")
     @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
-    async def check_artifact_record(self, interaction: discord.Interaction):
-        opponent_server = get_guild_config(interaction.guild.id).get("artifact_opponent_server")
+    @app_commands.describe(server="과거 상대 서버를 조회할 때만 입력 (생략하면 최신 매칭)")
+    async def check_artifact_record(self, interaction: discord.Interaction, server: str | None = None):
+        await interaction.response.defer(thinking=True)
+        latest = await self._refresh_latest_result() if server is None else None
+        opponent_server = server.strip() if server else (
+            latest["record"]["opponent_server"] if latest else latest_saved_artifact_opponent()
+        )
+        opponent_server = opponent_server or get_guild_config(interaction.guild.id).get("artifact_opponent_server")
         if not opponent_server:
-            await interaction.response.send_message(
+            await interaction.followup.send(
                 "❌ 먼저 `/아티설정`으로 브리트라의 상대 서버를 설정해주세요.", ephemeral=True
             )
             return
 
-        await interaction.response.defer()
         history = load_artifact_history(f"브리트라 VS {opponent_server}")
         if not history:
             direct_chapter_history = load_artifact_chapter_matchups(
@@ -1039,58 +1148,7 @@ class Automation(commands.Cog):
             await send_embed_pages(interaction, embed)
             return
 
-        record = history.get("record")
-        if not record:
-            await interaction.followup.send(
-                "❌ 저장된 기록에 요약 전적이 아직 없어요. 기록 데이터를 다시 등록해주세요."
-            )
-            return
-
-        matchup = record.get("matchup")
-        if not matchup:
-            return await interaction.followup.send("요약 전적이 아직 준비되지 않았어요. 다음 수집 후 다시 확인해주세요.")
-        opponent_captures = (
-            f"{record['opponent_capture_count']}회"
-            if record["opponent_capture_count"] is not None
-            else "확인 불가"
-        )
-        breitra_captures = (
-            f"{record['breitra_capture_count']}회"
-            if record["breitra_capture_count"] is not None
-            else "확인 불가"
-        )
-        embed = discord.Embed(
-            title=f"🏺 아티팩트 전적 · 브리트라 vs {opponent_server}",
-            url=record["url"],
-            color=discord.Color.gold(),
-        )
-        embed.add_field(
-            name="총 전적",
-            value=f"브리트라 점령 **{breitra_captures}** · {opponent_server} 점령 **{opponent_captures}**",
-            inline=False,
-        )
-        embed.add_field(
-            name=f"지난 회차 ({matchup['round']})",
-            value=f"브리트라 **{matchup['breitra_round']}** {matchup['breitra_result']} · {opponent_server} **{matchup['opponent_round']}** {matchup['opponent_result']}",
-            inline=False,
-        )
-        embed.add_field(
-            name="브리트라 상대 누적 전적",
-            value=f"브리트라 **{matchup['breitra_total']}** : **{matchup['opponent_total']}** {opponent_server}",
-            inline=False,
-        )
-        if history.get("records"):
-            history_lines = [
-                f"{item['date']} ({item['round']}): {', '.join(item['scores']) or '점수 확인 불가'}"
-                for item in history["records"]
-            ]
-            embed.add_field(name="회차별 기록", value="\n".join(history_lines), inline=False)
-        else:
-            embed.add_field(name="회차별 기록", value="상세 기록을 찾지 못했어요.", inline=False)
-        if record.get("completion"):
-            embed.set_footer(text=f"{record['completion']} · 아툴 비공식 참고용 통계")
-        else:
-            embed.set_footer(text="아툴 비공식 참고용 통계")
+        embed = build_artifact_history_embed(opponent_server, history, live=latest is not None)
         await send_embed_pages(interaction, embed)
 
     @app_commands.command(name="관리자패널", description="버튼으로 봇 설정을 관리하는 패널을 게시합니다.")
@@ -1100,7 +1158,7 @@ class Automation(commands.Cog):
     async def create_admin_panel(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
         message = await interaction.channel.send(
-            embed=build_admin_panel_embed(interaction.guild),
+            content=embed_text(build_admin_panel_embed(interaction.guild)), embed=build_admin_panel_embed(interaction.guild),
             view=AdminPanelView(),
         )
         config = get_guild_config(interaction.guild.id)
@@ -1145,7 +1203,7 @@ class Automation(commands.Cog):
             color=discord.Color.blurple(),
         )
         await interaction.response.defer(ephemeral=True, thinking=True)
-        await interaction.channel.send(embed=embed, view=AlarmMessagePanelView())
+        await interaction.channel.send(content=embed_text(embed), embed=embed, view=AlarmMessagePanelView())
         await interaction.followup.send("✅ 알람 문구 설정 패널을 게시했어요.", ephemeral=True)
 
 
@@ -1167,8 +1225,8 @@ class Automation(commands.Cog):
             title="🎫 문의 티켓",
             description=(
                 "버그 제보, 인증 문제, 개인적인 신고나 상담이 필요하면 아래 버튼을 눌러주세요.\n"
-                "버튼을 누르면 **본인과 운영진만 볼 수 있는 전용 채널**이 자동으로 생성돼요.\n\n"
-                "- 🐛 게임 버그, 인증 오류 신고\n"
+                "버튼을 누르면 **본인과 관리자만 볼 수 있는 전용 채널**이 자동으로 생성돼요.\n\n"
+                "- 🐛 봇 버그, 인증 오류 신고\n"
                 "- 🙋 개인적인 문의나 상담\n"
                 "- 🚨 다른 멤버 신고 (증거가 있다면 함께 첨부해주세요)\n\n"
                 "> 💬 일반적인 질문이나 잡담은 채팅 채널을 이용해주세요. 문의가 끝나면 채널은 정리될 수 있어요."
@@ -1176,7 +1234,7 @@ class Automation(commands.Cog):
             color=discord.Color.blurple(),
         )
         await interaction.response.defer(ephemeral=True, thinking=True)
-        await interaction.channel.send(embed=embed, view=TicketView())
+        await interaction.channel.send(content=embed_text(embed), embed=embed, view=TicketView())
         await interaction.followup.send("✅ 티켓 패널을 게시했어요.", ephemeral=True)
 
 
@@ -1220,7 +1278,7 @@ class Automation(commands.Cog):
                 )
                 embed.set_thumbnail(url=member.display_avatar.url)
                 embed.set_footer(text=f"현재 멤버 수: {member.guild.member_count}명")
-                await channel.send(embed=embed)
+                await channel.send(content=embed_text(embed), embed=embed)
 
         # 로그
         await self._log(
@@ -1242,7 +1300,7 @@ class Automation(commands.Cog):
                     color=discord.Color.dark_grey(),
                 )
                 embed.set_footer(text=f"현재 멤버 수: {member.guild.member_count}명")
-                await channel.send(embed=embed)
+                await channel.send(content=embed_text(embed), embed=embed)
 
         await self._log(member.guild, f"📤 **퇴장** {member} ({member.id})")
 

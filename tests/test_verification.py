@@ -147,12 +147,14 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
             calls = self.interaction.edit_original_response.await_args_list
             self.assertEqual(len(calls), 1)
             self.assertEqual(calls[0].kwargs["embed"].title, "⏳ 인증을 진행 중입니다")
+            self.assertIn("인증을 진행 중입니다", calls[0].kwargs["content"])
             return {"nickname": "test", "profile_url": "https://aion2.plaync.com/profile"}
         self.comment.side_effect = lookup
         await self.check()
         edits = [call for call in self.interaction.edit_original_response.await_args_list if "embed" in call.kwargs]
         self.assertEqual(len(edits), 2)
         self.assertEqual(edits[-1].kwargs["embed"].title, "✅ 인증 완료")
+        self.assertIn("인증 완료", edits[-1].kwargs["content"])
         self.interaction.followup.send.assert_not_awaited()
 
     async def test_success_sends_private_alarm_panel_after_completion(self):
@@ -160,6 +162,7 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(self.record()["verified"])
             self.assertEqual([call for call in self.interaction.edit_original_response.await_args_list if "embed" in call.kwargs][-1].kwargs["embed"].title, "✅ 인증 완료")
             self.assertTrue(kwargs["ephemeral"])
+            self.assertIn("알람 설정", kwargs["content"])
             self.assertEqual(kwargs["embed"].title, "🔔 알람 설정")
             self.assertIn("아티쟁 전략 공유", kwargs["embed"].description)
             self.assertEqual([button.label for button in kwargs["view"].children], ["필드보스", "시공", "어비스"])

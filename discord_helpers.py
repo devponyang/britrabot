@@ -8,6 +8,19 @@ logger = logging.getLogger(__name__)
 TICKETS_IN_FLIGHT = set()
 
 
+def embed_text(embed: discord.Embed, limit: int = 1900) -> str:
+    """Essential text also remains visible when a member hides embeds."""
+    parts = [f"**{embed.title}**"] if embed.title else []
+    if embed.description:
+        parts.append(embed.description)
+    for field in embed.fields:
+        parts.append(f"**{field.name}**\n{field.value}")
+    if embed.url:
+        parts.append(f"원문: <{embed.url}>")
+    text = "\n\n".join(parts)
+    return text if len(text) <= limit else text[:limit - 20] + "\n… 상세 내용은 임베드 참고"
+
+
 async def respond(interaction, message):
     if interaction.response.is_done():
         await interaction.followup.send(message, ephemeral=True)
@@ -26,10 +39,10 @@ async def send_embed_pages(interaction, embed):
             name = field["name"][:240] + (" (계속)" if offset else "")
             chunk = value[offset:offset + 1024]
             if len(current.fields) >= 25 or len(current) + len(name) + len(chunk) > 6000:
-                await interaction.followup.send(embed=current)
+                await interaction.followup.send(content=embed_text(current), embed=current)
                 current = discord.Embed.from_dict(base)
             current.add_field(name=name, value=chunk, inline=field.get("inline", False))
-    await interaction.followup.send(embed=current)
+    await interaction.followup.send(content=embed_text(current), embed=current)
 
 
 class SafeView(discord.ui.View):

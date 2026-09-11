@@ -28,7 +28,7 @@ DEFAULT_TARGET_SERVER = "브리트라"
 AUTOMATION_CONFIG_FILE = BASE_DIR / "guild_config.json"
 MIN_POWER_LEVEL = 450
 from alarm_settings import ALARM_ROLE_GUILD_ID, ALARM_ROLE_IDS, ALARM_ROLE_GROUPS
-from discord_helpers import SafeView, open_ticket, toggle_role
+from discord_helpers import SafeView, open_ticket, toggle_role, embed_text
 ACTIVE_VERIFY_MESSAGES: dict[tuple[int, int], discord.WebhookMessage] = {}
 
 
@@ -73,7 +73,7 @@ async def finish_verification(interaction: discord.Interaction, message: str | N
             description=message,
             color=discord.Color.green() if success else discord.Color.orange(),
         )
-    return await interaction.edit_original_response(content=None, embed=embed)
+    return await interaction.edit_original_response(content=embed_text(embed), embed=embed)
 
 
 def verification_request(callback):
@@ -99,7 +99,7 @@ def verification_request(callback):
                 request_view.check_button.label = "인증 확인 중…"
                 await interaction.response.edit_message(view=request_view)
                 acknowledged = True
-                await interaction.edit_original_response(content=None, embed=build_verification_progress_embed())
+                await interaction.edit_original_response(content=embed_text(build_verification_progress_embed()), embed=build_verification_progress_embed())
             else:
                 await interaction.response.defer(ephemeral=True, thinking=True)
                 acknowledged = True
@@ -227,7 +227,7 @@ class VerifyPanelView(SafeView):
                 ACTIVE_VERIFY_MESSAGES.pop(message_key, None)
 
         message = await interaction.followup.send(
-            embed=embed, view=message_view, ephemeral=True, wait=True
+            content=embed_text(embed), embed=embed, view=message_view, ephemeral=True, wait=True
         )
         ACTIVE_VERIFY_MESSAGES[message_key] = message
         def forget():
@@ -291,6 +291,7 @@ async def send_verification_alarm_panel(interaction: discord.Interaction):
         return
     try:
         await interaction.followup.send(
+            content=embed_text(build_verification_alarm_embed()),
             embed=build_verification_alarm_embed(),
             view=VerificationAlarmRoleView(),
             ephemeral=True,
@@ -484,7 +485,7 @@ class Verify(commands.Cog):
         description = description.replace("브리트라", target_server).replace("450", str(MIN_POWER_LEVEL))
         embed = discord.Embed(title=title[:256], description=description[:4096], color=discord.Color.blue())
         await interaction.response.defer(ephemeral=True, thinking=True)
-        await interaction.channel.send(embed=embed, view=VerifyPanelView())
+        await interaction.channel.send(content=embed_text(embed), embed=embed, view=VerifyPanelView())
         await interaction.followup.send("✅ 인증 패널을 게시했어요.", ephemeral=True)
 
     @app_commands.command(name="인증역할설정", description="인증 성공 시 부여할 역할을 설정합니다.")

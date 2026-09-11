@@ -8,3 +8,6 @@ warnings.json
 .venv/
 .browsers/
 *.json.*.tmp
+
+voice_rooms.json
+.artifact-source.json
