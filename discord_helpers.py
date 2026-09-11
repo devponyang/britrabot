@@ -3,6 +3,7 @@ import logging
 import re
 
 import discord
+from server_scope import allowed_guild
 
 logger = logging.getLogger(__name__)
 TICKETS_IN_FLIGHT = set()
@@ -39,13 +40,16 @@ async def send_embed_pages(interaction, embed):
             name = field["name"][:240] + (" (계속)" if offset else "")
             chunk = value[offset:offset + 1024]
             if len(current.fields) >= 25 or len(current) + len(name) + len(chunk) > 6000:
-                await interaction.followup.send(content=embed_text(current), embed=current)
+                await interaction.followup.send(embed=current)
                 current = discord.Embed.from_dict(base)
             current.add_field(name=name, value=chunk, inline=field.get("inline", False))
-    await interaction.followup.send(content=embed_text(current), embed=current)
+    await interaction.followup.send(embed=current)
 
 
 class SafeView(discord.ui.View):
+    async def interaction_check(self, interaction):
+        return allowed_guild(interaction.guild)
+
     async def on_error(self, interaction, error, item):
         logger.error("버튼 처리 실패", exc_info=error)
         await respond(interaction, "⚠️ 작업에 실패했어요. 봇 권한을 확인하거나 잠시 후 다시 시도해주세요.")
@@ -53,6 +57,8 @@ class SafeView(discord.ui.View):
 
 class SafeModal(discord.ui.Modal):
     async def interaction_check(self, interaction):
+        if not allowed_guild(interaction.guild):
+            return False
         if interaction.guild is None or not interaction.user.guild_permissions.administrator:
             await respond(interaction, "관리자만 설정을 변경할 수 있어요.")
             return False

@@ -559,6 +559,8 @@ class VerificationAdminView(SafeView):
         self.add_item(VerificationRoleSelect())
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not await super().interaction_check(interaction):
+            return False
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ 관리자만 이 패널을 사용할 수 있어요.", ephemeral=True)
             return False
@@ -598,6 +600,8 @@ class AdminPanelView(SafeView):
         self.add_item(AdminPanelRoleSelect())
 
     async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if not await super().interaction_check(interaction):
+            return False
         if not interaction.user.guild_permissions.administrator:
             await interaction.response.send_message("❌ 관리자만 이 패널을 사용할 수 있어요.", ephemeral=True)
             return False

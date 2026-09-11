@@ -6,6 +6,7 @@ from discord.ext import commands
 from dotenv import load_dotenv
 from storage import BASE_DIR
 import aion2_scraper
+from server_scope import ALLOWED_GUILD_ID, allowed_guild
 
 # .env 파일에서 환경변수 로드 (봇 토큰 등)
 load_dotenv(BASE_DIR / ".env")
@@ -28,11 +29,43 @@ intents.members = True
 intents.voice_states = True
 intents.message_content = True
 
+class ServerCommandTree(discord.app_commands.CommandTree):
+    async def interaction_check(self, interaction):
+        return interaction.guild_id == ALLOWED_GUILD_ID
+
+
 class ServerBot(commands.Bot):
+    @property
+    def guilds(self):
+        # Background jobs only iterate over the allowed guild, even if leaving fails.
+        return [guild for guild in super().guilds if allowed_guild(guild)]
+
+    def dispatch(self, event, /, *args, **kwargs):
+        if event in {"member_join", "member_remove", "message_delete", "voice_state_update", "message"}:
+            if not args or not allowed_guild(getattr(args[0], "guild", None)):
+                return
+        super().dispatch(event, *args, **kwargs)
+
+    async def enforce_server_scope(self):
+        for guild in list(super().guilds):
+            if not allowed_guild(guild):
+                await self.leave_unapproved_guild(guild)
+
+    async def leave_unapproved_guild(self, guild):
+        try:
+            await guild.leave()
+            logger.warning("허용하지 않은 서버에서 탈퇴: %s (%s)", guild.name, guild.id)
+        except discord.HTTPException:
+            logger.exception("서버 탈퇴 실패 (해당 서버 기능은 차단됨): %s", guild.id)
+
     async def setup_hook(self):
         await load_extensions()
-        synced = await self.tree.sync()
-        logger.info("슬래시 명령어 %s개 동기화 완료", len(synced))
+        target = discord.Object(id=ALLOWED_GUILD_ID)
+        self.tree.copy_global_to(guild=target)
+        synced = await self.tree.sync(guild=target)
+        self.tree.clear_commands(guild=None)
+        await self.tree.sync()  # Remove previously registered global commands.
+        logger.info("허용 서버 %s에 슬래시 명령어 %s개 동기화 완료", ALLOWED_GUILD_ID, len(synced))
 
     async def close(self):
         try:
@@ -44,13 +77,21 @@ class ServerBot(commands.Bot):
 
 
 bot = ServerBot(command_prefix="!", intents=intents, help_command=None,
+                tree_cls=ServerCommandTree,
                 allowed_mentions=discord.AllowedMentions.none())
 
 
 @bot.event
 async def on_ready():
+    await bot.enforce_server_scope()
     logger.info(f"{bot.user} 로 로그인 완료 (ID: {bot.user.id})")
-    logger.info(f"현재 {len(bot.guilds)}개 서버에서 작동 중입니다.")
+    logger.info("허용 서버 %s에서만 작동합니다 (연결된 허용 서버: %s개).", ALLOWED_GUILD_ID, len(bot.guilds))
+
+
+@bot.event
+async def on_guild_join(guild):
+    if not allowed_guild(guild):
+        await bot.leave_unapproved_guild(guild)
 
 
 @bot.event
