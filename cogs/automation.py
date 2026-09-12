@@ -101,8 +101,8 @@ def build_alarm_embed(alarm_message: str, schedule_key: str, custom_text: str | 
     )
     embed = discord.Embed(
         title=f"{style['emoji']} {event_name} · {phase}",
-        description=f"**시작:** <t:{int(scheduled.timestamp())}:f> (<t:{int(scheduled.timestamp())}:R>)\n{instructions}",
-        color=style["color"], timestamp=scheduled,
+        description=f"**시작:** {scheduled:%Y년 %m월 %d일 %H:%M} (KST)\n**발송 시각:** {now:%H:%M} (KST)\n{instructions}",
+        color=style["color"], timestamp=now,
     )
     if custom_text:
         embed.add_field(name="운영진 안내", value=custom_text[:1024], inline=False)

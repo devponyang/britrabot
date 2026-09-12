@@ -18,6 +18,21 @@ logger = logging.getLogger(__name__)
 LABELS = {'party': '파티 모집', 'legion': '레기온 홍보'}
 PANEL_CHANNEL_ID = 1548041064961810482
 POST_CHANNEL_IDS = {'party': 1547063601611804803, 'legion': 1547063786320568350}
+PARTY_PING_NAMES = ('어비스', '아티쟁', '시공', 'PvE', '필드보스')
+
+def resolve_party_roles(guild, names):
+    roles = []
+    for name in dict.fromkeys(names):
+        if name not in PARTY_PING_NAMES:
+            raise ValueError('허용되지 않은 알림 역할입니다.')
+        matches = [role for role in guild.roles if role.name.casefold() == name.casefold()]
+        if len(matches) != 1:
+            raise ValueError(f'@{name} 역할이 없거나 같은 이름이 여러 개입니다. 관리자에게 확인해주세요.')
+        roles.append(matches[0])
+    return roles
+
+def party_ping_content(row):
+    return ' '.join(f'<@&{role_id}>' for role_id in row.get('ping_role_ids', [])) or None
 
 
 def parse_party_start(date_text, time_text):
@@ -44,7 +59,7 @@ def is_closed(row):
 
 def post_embed(row):
     closed = is_closed(row)
-    full = row['kind'] == 'party' and len(row['members']) >= row['size']
+    full = row['kind'] == 'party' and len(row['members']) >= min(row['size'], 20)
     status = '🔴 모집 종료' if closed else '🟠 정원 마감' if full else '🟢 모집 중'
     embed = discord.Embed(title=f"{status} | {row['title']}", description=row['details'], color=discord.Color.greyple() if closed else discord.Color.orange() if full else discord.Color.green())
     embed.add_field(name='모집 상태', value=status)
@@ -52,21 +67,25 @@ def post_embed(row):
     if row['kind'] == 'party':
         timestamp = int(dt.datetime.fromisoformat(row['starts']).timestamp())
         embed.add_field(name='출발 시각', value=f'<t:{timestamp}:f> (<t:{timestamp}:R>)', inline=False)
-        embed.add_field(name=f"참여 인원 {len(row['members'])}/{row['size']} (모집자 포함)", value=' '.join(f'<@{uid}>' for uid in row['members']), inline=False)
+        if row.get('voice_channel_id'):
+            embed.add_field(name='모집자의 음성방 (작성 시점)', value=f"<#{row['voice_channel_id']}>\n채널 접근·연결 권한이 있어야 입장할 수 있어요.", inline=False)
+        embed.add_field(name=f"참여 인원 {len(row['members'])}/{min(row['size'], 20)} (모집자 포함)", value=' '.join(f'<@{uid}>' for uid in row['members']), inline=False)
     embed.set_footer(text='수정·종료·삭제는 관리 채널의 내 모집글 관리에서 이용해주세요.')
     return embed
 
 
 class RecruitModal(discord.ui.Modal):
-    def __init__(self, cog, kind, row=None, message_id=None):
+    def __init__(self, cog, kind, row=None, message_id=None, ping_names=(), include_voice=False):
         super().__init__(title=LABELS[kind] + (' 수정' if row else ' 작성'), timeout=300)
         self.cog, self.kind, self.message_id = cog, kind, message_id
+        self.ping_names = tuple(ping_names)
+        self.include_voice = include_voice
         self.subject = discord.ui.TextInput(label='콘텐츠 / 레기온 이름', max_length=70, default=row['title'] if row else None)
         self.details = discord.ui.TextInput(label='조건·소개·주 활동 시간·문의 방법', style=discord.TextStyle.paragraph, max_length=1200, default=row['details'] if row else None)
         self.add_item(self.subject)
         self.add_item(self.details)
         if kind == 'party':
-            self.capacity = discord.ui.TextInput(label='모집자 포함 정원 (2~24명)', default=str(row['size']) if row else '6', max_length=2)
+            self.capacity = discord.ui.TextInput(label='모집자 포함 정원 (2~20명)', default=str(row['size']) if row else '6', max_length=2)
             previous = dt.datetime.fromisoformat(row['starts']).astimezone(KST) if row else None
             self.start_date = discord.ui.TextInput(label='출발 날짜 (2026년 고정)', placeholder='0912 또는 912 → 9월 12일 / 9/2도 가능', default=previous.strftime('%m%d') if previous else None, max_length=5)
             self.start_time = discord.ui.TextInput(label='출발 시간 (한국 시간 · 24시간제)', placeholder='16:00 또는 1600 / 09:00 또는 900', default=previous.strftime('%H:%M') if previous else None, max_length=5)
@@ -86,11 +105,11 @@ class RecruitModal(discord.ui.Modal):
             try:
                 size = int(self.capacity.value)
                 starts = parse_party_start(self.start_date.value, self.start_time.value)
-                if not 2 <= size <= 24 or starts <= dt.datetime.now(KST):
+                if not 2 <= size <= 20 or starts <= dt.datetime.now(KST):
                     raise ValueError()
                 changes.update(size=size, starts=starts.isoformat())
             except ValueError:
-                return await respond(interaction, '정원은 2~24명입니다. 날짜는 0912·912 또는 9/12, 시간은 16:00·1600 형식으로 입력해주세요. 2026년의 실제 존재하는 날짜와 현재 이후 시각만 가능합니다.')
+                return await respond(interaction, '정원은 2~20명입니다. 날짜는 0912·912 또는 9/12, 시간은 16:00·1600 형식으로 입력해주세요. 2026년의 실제 존재하는 날짜와 현재 이후 시각만 가능합니다.')
         await interaction.response.defer(ephemeral=True, thinking=True)
         async with self.cog.lock:
             data = load_json(FILE)
@@ -115,8 +134,20 @@ class RecruitModal(discord.ui.Modal):
                 destination = interaction.guild.get_channel(POST_CHANNEL_IDS[self.kind])
                 if destination is None:
                     return await respond(interaction, '모집글 게시 채널을 찾을 수 없어요. 관리자에게 문의해주세요.')
-                row = dict(changes, kind=self.kind, owner=interaction.user.id, members=[interaction.user.id], closed=False, channel_id=destination.id)
-                message = await destination.send(embed=post_embed(row), view=PostView(self.cog, self.kind), allowed_mentions=discord.AllowedMentions.none())
+                try:
+                    ping_roles = resolve_party_roles(interaction.guild, self.ping_names) if self.kind == 'party' else []
+                except ValueError as error:
+                    return await respond(interaction, str(error))
+                if any(not role.mentionable for role in ping_roles) and not destination.permissions_for(interaction.guild.me).mention_everyone:
+                    return await respond(interaction, '선택한 역할을 멘션할 수 없어요. 관리자에게 역할 멘션 허용 또는 봇의 역할 멘션 권한을 확인해주세요.')
+                voice_id = None
+                if self.kind == 'party' and self.include_voice:
+                    voice = interaction.user.voice
+                    if not voice or not voice.channel:
+                        return await respond(interaction, '음성방 공유를 선택했지만 현재 접속 중인 음성방이 없어요. 음성방에 입장 후 다시 작성해주세요.')
+                    voice_id = voice.channel.id
+                row = dict(changes, voice_channel_id=voice_id, ping_role_ids=[role.id for role in ping_roles], kind=self.kind, owner=interaction.user.id, members=[interaction.user.id], closed=False, channel_id=destination.id)
+                message = await destination.send(content=party_ping_content(row), embed=post_embed(row), view=PostView(self.cog, self.kind), allowed_mentions=discord.AllowedMentions(everyone=False, users=False, roles=ping_roles))
                 posts[str(message.id)] = row
             save_json(FILE, data)
             if self.message_id:
@@ -139,6 +170,8 @@ class PanelView(SafeView):
                 panel = load_json(FILE).get('panel')
                 if interaction.channel_id != PANEL_CHANNEL_ID or not panel or panel['message_id'] != interaction.message.id:
                     return await respond(interaction, f'통합 패널 <#{PANEL_CHANNEL_ID}>을 이용해주세요.')
+                if kind == 'party':
+                    return await interaction.response.send_message('알림을 보낼 역할을 선택하세요(선택 사항·여러 개 가능). 선택하지 않고 작성할 수도 있어요. 최초 게시할 때 한 번만 멘션합니다. 내 음성방 공유를 켜면 작성 완료 시 접속 중인 음성방도 표시합니다.', view=PartyRolesView(cog, interaction.user.id), ephemeral=True)
                 await interaction.response.send_modal(RecruitModal(cog, kind))
             button.callback = clicked
             self.add_item(button)
@@ -151,6 +184,38 @@ class PanelView(SafeView):
         if not posts:
             return await respond(interaction, '작성한 모집글이 없어요.')
         await interaction.response.send_message('관리할 글을 선택해주세요. 본인에게만 보입니다.', view=ManageSelectView(self.cog, interaction.user.id, posts), ephemeral=True)
+
+
+class PartyRolesView(SafeView):
+    def __init__(self, cog, owner):
+        super().__init__(timeout=300)
+        self.cog, self.owner, self.names = cog, owner, []
+        self.include_voice = False
+        select = discord.ui.Select(placeholder='알림 역할 선택 (선택하지 않아도 됩니다)', min_values=0, max_values=len(PARTY_PING_NAMES),
+                                   options=[discord.SelectOption(label='@'+name, value=name) for name in PARTY_PING_NAMES])
+        async def selected(interaction):
+            self.names = list(select.values)
+            await interaction.response.defer()
+        select.callback = selected
+        self.add_item(select)
+
+    async def interaction_check(self, interaction):
+        return await super().interaction_check(interaction) and interaction.user.id == self.owner and interaction.channel_id == PANEL_CHANNEL_ID
+
+    @discord.ui.button(label='내 음성방 공유: 끔', style=discord.ButtonStyle.secondary, row=2)
+    async def toggle_voice(self, interaction, button):
+        self.include_voice = not self.include_voice
+        button.label = '내 음성방 공유: 켬' if self.include_voice else '내 음성방 공유: 끔'
+        button.style = discord.ButtonStyle.success if self.include_voice else discord.ButtonStyle.secondary
+        await interaction.response.edit_message(view=self)
+
+    @discord.ui.button(label='선택한 역할로 작성', style=discord.ButtonStyle.primary)
+    async def proceed(self, interaction, button):
+        await interaction.response.send_modal(RecruitModal(self.cog, 'party', ping_names=self.names, include_voice=self.include_voice))
+
+    @discord.ui.button(label='멘션 없이 작성', style=discord.ButtonStyle.secondary)
+    async def skip(self, interaction, button):
+        await interaction.response.send_modal(RecruitModal(self.cog, 'party', include_voice=self.include_voice))
 
 
 class PostView(SafeView):
@@ -241,7 +306,7 @@ class Recruitment(commands.Cog):
         message = await channel.fetch_message(int(message_id))
         if unchanged:
             return
-        await message.edit(content=None, embed=embed, view=PostView(self, row['kind']))
+        await message.edit(content=party_ping_content(row), embed=embed, view=PostView(self, row['kind']), allowed_mentions=discord.AllowedMentions.none())
         row['signature'] = signature
 
     async def action(self, interaction, action, message_id=None):
@@ -282,7 +347,7 @@ class Recruitment(commands.Cog):
                         return await respond(interaction, '먼저 출발 시각을 미래로 수정해주세요.')
                 row['closed'] = action == 'close'
             elif row['kind'] == 'party' and action == 'join':
-                if is_closed(row) or len(row['members']) >= row['size']:
+                if is_closed(row) or len(row['members']) >= min(row['size'], 20):
                     return await respond(interaction, '모집이 마감됐어요.')
                 if uid not in row['members']:
                     row['members'].append(uid)

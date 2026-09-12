@@ -271,3 +271,83 @@ class CommunityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(modal.children), 5)
         self.assertEqual(modal.start_date.default, '0912')
         self.assertEqual(modal.start_time.default, '16:00')
+
+    def test_party_role_allowlist_and_duplicates(self):
+        role = Mock(id=500, mentionable=True)
+        role.name = 'PvE'
+        self.guild.roles = [role]
+        self.assertEqual(r.resolve_party_roles(self.guild, ['PvE', 'PvE']), [role])
+        for names in (['everyone'], ['어비스']):
+            with self.assertRaises(ValueError):
+                r.resolve_party_roles(self.guild, names)
+        self.assertEqual(r.resolve_party_roles(self.guild, []), [])
+
+    async def test_party_optional_role_is_pinged_only_on_initial_post(self):
+        self.interaction.channel_id = r.PANEL_CHANNEL_ID
+        self.channel.id = r.POST_CHANNEL_IDS['party']
+        r.save_json(r.FILE, {'panel': {'channel_id': r.PANEL_CHANNEL_ID, 'message_id': 100}})
+        role = Mock(id=500, mentionable=True)
+        role.name = '어비스'
+        self.guild.roles = [role]
+        cog = r.Recruitment(self.bot)
+        modal = r.RecruitModal(cog, 'party', ping_names=['어비스'])
+        modal.subject = SimpleNamespace(value='파티')
+        modal.details = SimpleNamespace(value='소개')
+        modal.capacity = SimpleNamespace(value='6')
+        modal.start_date = SimpleNamespace(value='1231')
+        modal.start_time = SimpleNamespace(value='2359')
+        await modal.on_submit(self.interaction)
+        sent = self.channel.send.await_args.kwargs
+        self.assertEqual(sent['content'], '<@&500>')
+        self.assertEqual(sent['allowed_mentions'].roles, [role])
+        self.assertFalse(sent['allowed_mentions'].everyone)
+        row = r.load_json(r.FILE)['posts']['100']
+        await cog.refresh_post(self.guild, 100, row)
+        edited = self.message.edit.await_args.kwargs
+        self.assertEqual(edited['content'], '<@&500>')
+        self.assertFalse(edited['allowed_mentions'].roles)
+
+    async def test_skip_role_selection_opens_unpinged_modal(self):
+        self.interaction.response.send_modal = AsyncMock()
+        view = r.PartyRolesView(r.Recruitment(self.bot), 2)
+        view.names = ['시공']
+        await view.skip.callback(self.interaction)
+        self.assertEqual(self.interaction.response.send_modal.await_args.args[0].ping_names, ())
+
+    async def test_party_voice_sharing_and_twenty_member_limit(self):
+        self.interaction.channel_id = r.PANEL_CHANNEL_ID
+        self.channel.id = r.POST_CHANNEL_IDS['party']
+        self.interaction.user.voice = SimpleNamespace(channel=Mock(id=987))
+        r.save_json(r.FILE, {'panel': {'channel_id': r.PANEL_CHANNEL_ID, 'message_id': 100}})
+        cog = r.Recruitment(self.bot)
+        modal = r.RecruitModal(cog, 'party', include_voice=True)
+        modal.subject = SimpleNamespace(value='파티')
+        modal.details = SimpleNamespace(value='소개')
+        modal.capacity = SimpleNamespace(value='21')
+        modal.start_date = SimpleNamespace(value='1231')
+        modal.start_time = SimpleNamespace(value='2359')
+        await modal.on_submit(self.interaction)
+        self.channel.send.assert_not_awaited()
+        modal.capacity.value = '20'
+        await modal.on_submit(self.interaction)
+        row = r.load_json(r.FILE)['posts']['100']
+        self.assertEqual(row['size'], 20)
+        self.assertEqual(row['members'], [2])
+        self.assertEqual(row['voice_channel_id'], 987)
+        self.assertIn('<#987>', str(self.channel.send.await_args.kwargs['embed'].to_dict()))
+
+    async def test_voice_selection_is_optional_and_carried_into_modal(self):
+        self.interaction.response.edit_message = AsyncMock()
+        self.interaction.response.send_modal = AsyncMock()
+        view = r.PartyRolesView(r.Recruitment(self.bot), 2)
+        self.assertFalse(view.include_voice)
+        await view.toggle_voice.callback(self.interaction)
+        await view.skip.callback(self.interaction)
+        self.assertTrue(self.interaction.response.send_modal.await_args.args[0].include_voice)
+        self.assertEqual(self.interaction.response.send_modal.await_args.args[0].ping_names, ())
+
+    def test_field_boss_in_role_choices(self):
+        view = r.PartyRolesView(r.Recruitment(self.bot), 2)
+        select = next(child for child in view.children if isinstance(child, discord.ui.Select))
+        self.assertIn('필드보스', [option.value for option in select.options])
+        self.assertEqual(select.max_values, 5)

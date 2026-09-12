@@ -75,6 +75,15 @@ class ArtifactTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(a.should_ping_alarm("important", "아티팩트쟁:22:00:10"))
         self.assertFalse(a.should_ping_alarm("none", "아티팩트쟁:22:00:0"))
 
+    def test_alarm_time_is_fixed_and_timestamp_is_send_time(self):
+        now = datetime.datetime(2026, 9, 12, 16, 50, tzinfo=a.KST)
+        embed = a.build_alarm_embed('', '카이라:17:00:10', alarm_time=now, now=now)
+        self.assertIn('10분 전', embed.title)
+        self.assertIn('17:00', embed.description)
+        self.assertIn('16:50', embed.description)
+        self.assertNotIn(':R>', embed.description)
+        self.assertEqual(embed.timestamp, now)
+
     async def test_result_routes_to_new_channel(self):
         cfg = patch.object(a, "CONFIG_FILE", Path(a.ARTIFACT_RECORDS_FILE).with_name("config.json"))
         cfg.start()
