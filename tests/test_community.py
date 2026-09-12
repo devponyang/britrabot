@@ -89,7 +89,7 @@ class CommunityTests(unittest.IsolatedAsyncioTestCase):
         await cog.action(self.interaction, 'leave')
         saved = r.load_json(r.FILE)['posts']['100']
         self.assertEqual(saved['members'], [1])
-        self.assertEqual(r.post_embed(saved).fields[0].value, '모집 중')
+        self.assertEqual(r.post_embed(saved).fields[0].value, '🟢 모집 중')
 
     def test_past_party_is_closed(self):
         row = self.row()
@@ -116,7 +116,7 @@ class CommunityTests(unittest.IsolatedAsyncioTestCase):
         await r.Recruitment.panel.callback(cog, self.interaction)
         self.channel.send.assert_awaited_once()
         view = self.channel.send.await_args.kwargs['view']
-        self.assertEqual([button.label for button in view.children], ['파티 모집 작성', '레기온 홍보 작성'])
+        self.assertEqual([button.label for button in view.children], ['내 모집글 관리', '파티 모집 작성', '레기온 홍보 작성'])
         self.assertEqual(r.load_json(r.FILE)['panel']['channel_id'], r.PANEL_CHANNEL_ID)
 
     async def test_posts_route_to_separate_channels_from_unified_panel(self):
@@ -204,3 +204,45 @@ class CommunityTests(unittest.IsolatedAsyncioTestCase):
             await c.Coupons.info.callback(c.Coupons(self.bot), self.interaction)
         self.assertIn('갱신하지 못했어요', self.interaction.followup.send.await_args.args[0])
         self.channel.send.assert_not_awaited()
+
+    async def test_management_list_is_private_and_only_contains_own_posts(self):
+        own = {**self.row(), 'owner': 2}
+        r.save_json(r.FILE, {'posts': {'100': own, '200': self.row()}})
+        self.interaction.channel_id = r.PANEL_CHANNEL_ID
+        await r.PanelView(r.Recruitment(self.bot)).manage.callback(self.interaction)
+        kwargs = self.interaction.response.send_message.await_args.kwargs
+        self.assertTrue(kwargs['ephemeral'])
+        self.assertEqual([option.value for option in kwargs['view'].children[0].options], ['100'])
+        self.interaction.user.id = 9
+        self.assertFalse(await kwargs['view'].interaction_check(self.interaction))
+
+    def test_public_posts_only_have_participation_or_inquiry(self):
+        cog = r.Recruitment(self.bot)
+        self.assertEqual([b.label for b in r.PostView(cog, 'party').children], ['참가', '참가 취소'])
+        self.assertEqual([b.label for b in r.PostView(cog, 'legion').children], ['문의하기'])
+
+    async def test_legion_inquiry_private_permissions_and_reuse(self):
+        r.save_json(r.FILE, {'posts': {'100': {**self.row(), 'kind': 'legion'}}})
+        self.guild.text_channels = []
+        owner = Mock(id=1)
+        self.guild.get_member.return_value = owner
+        channel = Mock(id=300, mention='<#300>')
+        self.guild.create_text_channel = AsyncMock(return_value=channel)
+        self.guild.fetch_channel = AsyncMock(return_value=channel)
+        cog = r.Recruitment(self.bot)
+        await cog.inquiry(self.interaction)
+        await cog.inquiry(self.interaction)
+        self.guild.create_text_channel.assert_awaited_once()
+        overwrites = self.guild.create_text_channel.await_args.kwargs['overwrites']
+        self.assertFalse(overwrites[self.guild.default_role].view_channel)
+        self.assertTrue(overwrites[owner].view_channel)
+        self.assertTrue(overwrites[self.interaction.user].view_channel)
+
+    async def test_private_delete_targets_public_post_not_private_message(self):
+        row = {**self.row(), 'owner': 2}
+        r.save_json(r.FILE, {'posts': {'400': row}})
+        self.message.delete = AsyncMock()
+        await r.Recruitment(self.bot).action(self.interaction, 'delete', message_id='400')
+        self.channel.fetch_message.assert_awaited_with(400)
+        self.message.delete.assert_awaited_once()
+        self.assertEqual(r.load_json(r.FILE)['posts'], {})

@@ -26,15 +26,15 @@ def is_closed(row):
 def post_embed(row):
     closed = is_closed(row)
     full = row['kind'] == 'party' and len(row['members']) >= row['size']
-    status = '모집 종료' if closed else '정원 마감' if full else '모집 중'
-    embed = discord.Embed(title=f"{LABELS[row['kind']]} · {row['title']}", description=row['details'], color=discord.Color.greyple() if closed else discord.Color.green())
+    status = '🔴 모집 종료' if closed else '🟠 정원 마감' if full else '🟢 모집 중'
+    embed = discord.Embed(title=f"{status} | {row['title']}", description=row['details'], color=discord.Color.greyple() if closed else discord.Color.orange() if full else discord.Color.green())
     embed.add_field(name='모집 상태', value=status)
     embed.add_field(name='작성자 / 문의', value=f"<@{row['owner']}>")
     if row['kind'] == 'party':
         timestamp = int(dt.datetime.fromisoformat(row['starts']).timestamp())
         embed.add_field(name='출발 시각', value=f'<t:{timestamp}:f> (<t:{timestamp}:R>)', inline=False)
         embed.add_field(name=f"참여 인원 {len(row['members'])}/{row['size']} (모집자 포함)", value=' '.join(f'<@{uid}>' for uid in row['members']), inline=False)
-    embed.set_footer(text='버튼으로 조작하세요. 수정·종료는 작성자와 관리자만 가능합니다.')
+    embed.set_footer(text='수정·종료·삭제는 관리 채널의 내 모집글 관리에서 이용해주세요.')
     return embed
 
 
@@ -110,6 +110,7 @@ class RecruitModal(discord.ui.Modal):
 class PanelView(SafeView):
     def __init__(self, cog):
         super().__init__(timeout=None)
+        self.cog = cog
         for kind in LABELS:
             button = discord.ui.Button(label=LABELS[kind] + ' 작성', style=discord.ButtonStyle.primary, custom_id=f'recruit:panel:{kind}')
             async def clicked(interaction, kind=kind):
@@ -120,18 +121,67 @@ class PanelView(SafeView):
             button.callback = clicked
             self.add_item(button)
 
+    @discord.ui.button(label='내 모집글 관리', style=discord.ButtonStyle.secondary, custom_id='recruit:manage')
+    async def manage(self, interaction, button):
+        if interaction.channel_id != PANEL_CHANNEL_ID:
+            return await respond(interaction, f'<#{PANEL_CHANNEL_ID}>에서 이용해주세요.')
+        posts = [(mid, row) for mid, row in load_json(FILE).get('posts', {}).items() if row['owner'] == interaction.user.id]
+        if not posts:
+            return await respond(interaction, '작성한 모집글이 없어요.')
+        await interaction.response.send_message('관리할 글을 선택해주세요. 본인에게만 보입니다.', view=ManageSelectView(self.cog, interaction.user.id, posts), ephemeral=True)
+
 
 class PostView(SafeView):
     def __init__(self, cog, kind):
         super().__init__(timeout=None)
-        actions = [('join', '참가'), ('leave', '참가 취소')] if kind == 'party' else []
-        actions += [('edit', '모집글 수정'), ('close', '모집 종료'), ('reopen', '모집 재개')]
+        actions = [('join', '참가'), ('leave', '참가 취소')] if kind == 'party' else [('inquiry', '문의하기')]
         for action, label in actions:
             button = discord.ui.Button(label=label, custom_id=f'recruit:{kind}:{action}', style=discord.ButtonStyle.secondary)
             async def clicked(interaction, action=action):
-                await cog.action(interaction, action)
+                await cog.inquiry(interaction) if action == 'inquiry' else await cog.action(interaction, action)
             button.callback = clicked
             self.add_item(button)
+
+
+class ManageSelectView(SafeView):
+    def __init__(self, cog, owner, posts, page=0):
+        super().__init__(timeout=300)
+        self.owner = owner
+        selected = posts[page*25:(page+1)*25]
+        select = discord.ui.Select(placeholder='관리할 내 모집글', options=[discord.SelectOption(label=f"{LABELS[row['kind']]} · {row['title']}"[:100], value=mid) for mid, row in selected])
+        async def choose(interaction):
+            mid = select.values[0]
+            row = load_json(FILE).get('posts', {}).get(mid)
+            if not row or row['owner'] != owner:
+                return await respond(interaction, '이미 삭제되었거나 관리할 수 없는 글이에요.')
+            await interaction.response.edit_message(content=None, embed=post_embed(row), view=ManagePostView(cog, owner, mid))
+        select.callback = choose
+        self.add_item(select)
+        for offset, label in ((-1, '이전'), (1, '다음')):
+            if 0 <= page + offset < (len(posts)+24)//25:
+                button = discord.ui.Button(label=label)
+                async def flip(interaction, offset=offset):
+                    await interaction.response.edit_message(view=ManageSelectView(cog, owner, posts, page+offset))
+                button.callback = flip
+                self.add_item(button)
+
+    async def interaction_check(self, interaction):
+        return await super().interaction_check(interaction) and interaction.user.id == self.owner and interaction.channel_id == PANEL_CHANNEL_ID
+
+
+class ManagePostView(SafeView):
+    def __init__(self, cog, owner, mid):
+        super().__init__(timeout=300)
+        self.owner = owner
+        for action, label in [('edit', '수정'), ('close', '모집 종료'), ('reopen', '모집 재개'), ('delete', '글 삭제')]:
+            button = discord.ui.Button(label=label, style=discord.ButtonStyle.danger if action == 'delete' else discord.ButtonStyle.secondary)
+            async def clicked(interaction, action=action):
+                await cog.action(interaction, action, message_id=mid)
+            button.callback = clicked
+            self.add_item(button)
+
+    async def interaction_check(self, interaction):
+        return await super().interaction_check(interaction) and interaction.user.id == self.owner and interaction.channel_id == PANEL_CHANNEL_ID
 
 
 class Recruitment(commands.Cog):
@@ -172,19 +222,34 @@ class Recruitment(commands.Cog):
         await message.edit(content=None, embed=embed, view=PostView(self, row['kind']))
         row['signature'] = signature
 
-    async def action(self, interaction, action):
+    async def action(self, interaction, action, message_id=None):
+        message_id = message_id or interaction.message.id
         if action == 'edit':
-            row = load_json(FILE).get('posts', {}).get(str(interaction.message.id))
+            row = load_json(FILE).get('posts', {}).get(str(message_id))
             if not row or not self.can_manage(interaction, row):
                 return await respond(interaction, '작성자와 관리자만 수정할 수 있어요.')
-            return await interaction.response.send_modal(RecruitModal(self, row['kind'], row, interaction.message.id))
+            return await interaction.response.send_modal(RecruitModal(self, row['kind'], row, message_id))
         await interaction.response.defer(ephemeral=True, thinking=True)
         async with self.lock:
             data = load_json(FILE)
-            row = data.get('posts', {}).get(str(interaction.message.id))
+            row = data.get('posts', {}).get(str(message_id))
             if not row:
                 return await respond(interaction, '등록된 모집글이 아니에요.')
             uid = interaction.user.id
+            if action == 'delete':
+                if uid != row['owner']:
+                    return await respond(interaction, '작성자만 삭제할 수 있어요.')
+                channel = interaction.guild.get_channel(row['channel_id'])
+                if channel is None:
+                    return await respond(interaction, '게시 채널을 찾을 수 없어요.')
+                try:
+                    message = await channel.fetch_message(int(message_id))
+                    await message.delete()
+                except discord.NotFound:
+                    pass
+                del data['posts'][str(message_id)]
+                save_json(FILE, data)
+                return await respond(interaction, '✅ 모집글을 삭제했어요.')
             if action in ('close', 'reopen'):
                 if not self.can_manage(interaction, row):
                     return await respond(interaction, '작성자와 관리자만 모집 상태를 변경할 수 있어요.')
@@ -205,9 +270,44 @@ class Recruitment(commands.Cog):
                 if uid in row['members']:
                     row['members'].remove(uid)
             save_json(FILE, data)
-            await self.refresh_post(interaction.guild, interaction.message.id, row)
+            await self.refresh_post(interaction.guild, message_id, row)
             save_json(FILE, data)
         await respond(interaction, '✅ 모집글을 갱신했어요.')
+
+    async def inquiry(self, interaction):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        async with self.lock:
+            data = load_json(FILE)
+            row = data.get('posts', {}).get(str(interaction.message.id))
+            if not row or row['kind'] != 'legion' or is_closed(row):
+                return await respond(interaction, '현재 문의를 받는 레기온 홍보글이 아니에요.')
+            if row['owner'] == interaction.user.id:
+                return await respond(interaction, '본인 홍보글에는 문의할 수 없어요.')
+            guild = interaction.guild
+            owner = guild.get_member(row['owner'])
+            if owner is None:
+                try:
+                    owner = await guild.fetch_member(row['owner'])
+                except discord.NotFound:
+                    return await respond(interaction, '작성자가 서버에 없어 문의할 수 없어요.')
+            topic = f"legion-inquiry:{row['owner']}:{interaction.user.id}"
+            channel = next((ch for ch in guild.text_channels if ch.topic == topic), None)
+            if channel is None and topic in data.get('inquiries', {}):
+                try:
+                    channel = await guild.fetch_channel(data['inquiries'][topic])
+                except discord.NotFound:
+                    pass
+            if channel is None:
+                overwrites = {
+                    guild.default_role: discord.PermissionOverwrite(view_channel=False),
+                    owner: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+                    interaction.user: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True),
+                    guild.me: discord.PermissionOverwrite(view_channel=True, send_messages=True, read_message_history=True, manage_channels=True),
+                }
+                channel = await guild.create_text_channel(f'레기온-문의-{interaction.user.id}', topic=topic, overwrites=overwrites, reason='레기온 작성자와 문의자 전용 대화')
+            data.setdefault('inquiries', {})[topic] = channel.id
+            save_json(FILE, data)
+            await respond(interaction, f'✅ 문의 채널: {channel.mention}\n작성자와 본인이 대화할 수 있어요. 서버 관리자도 열람할 수 있습니다.')
 
     @app_commands.command(name='모집패널설정', description='지정된 채널에 파티·레기온 통합 모집 패널 하나를 설치합니다.')
     @app_commands.guild_only()
@@ -225,7 +325,7 @@ class Recruitment(commands.Cog):
                 '아래 버튼을 눌러 모집글을 작성해주세요.\n\n'
                 f'⚔️ **파티 모집** → <#{POST_CHANNEL_IDS["party"]}>\n'
                 f'🛡️ **레기온 홍보** → <#{POST_CHANNEL_IDS["legion"]}>\n\n'
-                '작성한 글은 해당 채널에 게시됩니다. 참가·수정·종료는 게시된 글의 버튼을 이용해주세요.'), color=discord.Color.blurple())
+                '작성한 글은 해당 채널에 게시됩니다. 파티 참가는 게시된 글에서, 수정·종료·삭제는 아래 내 모집글 관리에서 이용해주세요.'), color=discord.Color.blurple())
             message = None
             if existing and existing['channel_id'] == PANEL_CHANNEL_ID:
                 try:
