@@ -1,4 +1,5 @@
 import asyncio
+from contextvars import ContextVar
 import logging
 from functools import wraps
 
@@ -16,6 +17,7 @@ from verification_state import (generate_code, save_pending_code, get_pending_co
 CONFIG_FILE = BASE_DIR / "verify_config.json"
 logger = logging.getLogger(__name__)
 IN_FLIGHT = set()
+VERIFICATION_OUTCOME = ContextVar("verification_outcome", default=None)
 VERIFY_SLOTS = asyncio.Semaphore(3)
 VERIFY_TIMEOUT_SECONDS = 180
 
@@ -28,7 +30,7 @@ DEFAULT_TARGET_SERVER = "브리트라"
 AUTOMATION_CONFIG_FILE = BASE_DIR / "guild_config.json"
 MIN_POWER_LEVEL = 450
 from alarm_settings import ALARM_ROLE_GUILD_ID, ALARM_ROLE_IDS, ALARM_ROLE_GROUPS
-from discord_helpers import SafeView, open_ticket, toggle_role, embed_text
+from discord_helpers import SafeView, open_ticket, toggle_role
 ACTIVE_VERIFY_MESSAGES: dict[tuple[int, int], discord.WebhookMessage] = {}
 
 
@@ -73,7 +75,7 @@ async def finish_verification(interaction: discord.Interaction, message: str | N
             description=message,
             color=discord.Color.green() if success else discord.Color.orange(),
         )
-    return await interaction.edit_original_response(content=embed_text(embed), embed=embed)
+    return await interaction.edit_original_response(content=None, embed=embed)
 
 
 def verification_request(callback):
@@ -90,16 +92,18 @@ def verification_request(callback):
         request_view = None
         acknowledged = False
         completed = False
+        outcome = {"committed": False}
+        outcome_token = VERIFICATION_OUTCOME.set(outcome)
         try:
             if checking:
                 # Never mutate the shared persistent view: each message gets its own view.
-                article_url = next(child.url for child in self.children if child.url)
+                article_url = get_guild_config(interaction.guild.id)["article_url"]
                 request_view = VerifyCodeView(article_url)
                 request_view.check_button.disabled = True
                 request_view.check_button.label = "인증 확인 중…"
                 await interaction.response.edit_message(view=request_view)
                 acknowledged = True
-                await interaction.edit_original_response(content=embed_text(build_verification_progress_embed()), embed=build_verification_progress_embed())
+                await interaction.edit_original_response(content=None, embed=build_verification_progress_embed())
             else:
                 await interaction.response.defer(ephemeral=True, thinking=True)
                 acknowledged = True
@@ -111,13 +115,15 @@ def verification_request(callback):
         except asyncio.CancelledError:
             if checking and acknowledged:
                 try:
-                    await finish_verification(interaction, "⚠️ 인증 처리가 중단됐어요. 잠시 후 다시 시도해주세요.")
+                    await finish_verification(interaction, "✅ 인증과 역할 부여는 완료됐어요. 추가 안내 처리가 중단됐습니다." if outcome["committed"] else "⚠️ 인증 처리가 중단됐어요. 잠시 후 다시 시도해주세요.")
                 except discord.HTTPException:
                     logger.exception("인증 중단 안내 전송 실패")
             raise
         except Exception:
             logger.exception("인증 처리 실패: guild=%s user=%s", *key)
             message = "⚠️ 인증 처리 중 오류가 발생했어요. 잠시 후 다시 시도해주세요. 실패 횟수는 추가되지 않아요."
+            if outcome["committed"]:
+                message = "✅ 인증과 역할 부여는 완료됐어요. 닉네임 또는 추가 안내 처리는 완료하지 못했을 수 있어요."
             if checking and acknowledged:
                 await finish_verification(interaction, message)
             elif acknowledged:
@@ -127,6 +133,7 @@ def verification_request(callback):
         finally:
             try:
                 if request_view is not None and acknowledged:
+                    completed = completed or outcome["committed"]
                     request_view.check_button.disabled = completed
                     request_view.check_button.label = "인증 완료" if completed else "댓글 작성 완료 (다음)"
                     try:
@@ -135,6 +142,7 @@ def verification_request(callback):
                         logger.exception("인증 버튼 상태 갱신 실패: user=%s", interaction.user.id)
             finally:
                 IN_FLIGHT.discard(key)
+                VERIFICATION_OUTCOME.reset(outcome_token)
     return guarded
 
 
@@ -227,7 +235,7 @@ class VerifyPanelView(SafeView):
                 ACTIVE_VERIFY_MESSAGES.pop(message_key, None)
 
         message = await interaction.followup.send(
-            content=embed_text(embed), embed=embed, view=message_view, ephemeral=True, wait=True
+            content=None, embed=embed, view=message_view, ephemeral=True, wait=True
         )
         ACTIVE_VERIFY_MESSAGES[message_key] = message
         def forget():
@@ -291,7 +299,7 @@ async def send_verification_alarm_panel(interaction: discord.Interaction):
         return
     try:
         await interaction.followup.send(
-            content=embed_text(build_verification_alarm_embed()),
+            content=None,
             embed=build_verification_alarm_embed(),
             view=VerificationAlarmRoleView(),
             ephemeral=True,
@@ -397,6 +405,9 @@ class VerifyCodeView(SafeView):
             logger.exception("인증 역할 부여 실패")
             return await finish_verification(interaction, "⚠️ 인증 역할을 부여하지 못했어요. 관리자에게 권한을 확인한 뒤 다시 시도해주세요.")
         mark_verified(interaction.user.id, interaction.guild.id, role.id, comment["profile_url"])
+        outcome = VERIFICATION_OUTCOME.get()
+        if outcome is not None:
+            outcome["committed"] = True
         ACTIVE_VERIFY_MESSAGES.pop((interaction.guild.id, interaction.user.id), None)
 
         nickname_changed = True
@@ -485,7 +496,7 @@ class Verify(commands.Cog):
         description = description.replace("브리트라", target_server).replace("450", str(MIN_POWER_LEVEL))
         embed = discord.Embed(title=title[:256], description=description[:4096], color=discord.Color.blue())
         await interaction.response.defer(ephemeral=True, thinking=True)
-        await interaction.channel.send(content=embed_text(embed), embed=embed, view=VerifyPanelView())
+        await interaction.channel.send(content=None, embed=embed, view=VerifyPanelView())
         await interaction.followup.send("✅ 인증 패널을 게시했어요.", ephemeral=True)
 
     @app_commands.command(name="인증역할설정", description="인증 성공 시 부여할 역할을 설정합니다.")

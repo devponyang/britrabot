@@ -121,6 +121,23 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(final_view.check_button.disabled)
         self.assertEqual(final_view.check_button.label, "인증 완료")
 
+    async def test_timeout_after_role_commit_keeps_completed_button(self):
+        async def stalled(*args, **kwargs):
+            await asyncio.Future()
+        with patch.object(verify, 'log_verification', AsyncMock(side_effect=stalled)), patch.object(verify, 'VERIFY_TIMEOUT_SECONDS', 0.02), self.assertLogs('verify', level='ERROR'):
+            await self.check()
+        self.assertTrue(self.record()['verified'])
+        self.assertTrue(self.interaction.edit_original_response.await_args.kwargs['view'].check_button.disabled)
+        edits = [call for call in self.interaction.edit_original_response.await_args_list if 'embed' in call.kwargs]
+        self.assertEqual(edits[-1].kwargs['embed'].title, '✅ 인증 완료')
+        self.assertIsNone(verify.VERIFICATION_OUTCOME.get())
+
+    async def test_restored_view_uses_current_article_url(self):
+        self.config['article_url'] = 'https://aion2.plaync.com/ko-kr/board/server/view?articleId=current'
+        await self.check()
+        view = self.interaction.edit_original_response.await_args.kwargs['view']
+        self.assertIn(self.config['article_url'], [item.url for item in view.children])
+
     async def test_failure_reenables_button(self):
         self.comment.return_value = None
         await self.check()
@@ -147,14 +164,14 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
             calls = self.interaction.edit_original_response.await_args_list
             self.assertEqual(len(calls), 1)
             self.assertEqual(calls[0].kwargs["embed"].title, "⏳ 인증을 진행 중입니다")
-            self.assertIn("인증을 진행 중입니다", calls[0].kwargs["content"])
+            self.assertIsNone(calls[0].kwargs["content"])
             return {"nickname": "test", "profile_url": "https://aion2.plaync.com/profile"}
         self.comment.side_effect = lookup
         await self.check()
         edits = [call for call in self.interaction.edit_original_response.await_args_list if "embed" in call.kwargs]
         self.assertEqual(len(edits), 2)
         self.assertEqual(edits[-1].kwargs["embed"].title, "✅ 인증 완료")
-        self.assertIn("인증 완료", edits[-1].kwargs["content"])
+        self.assertIsNone(edits[-1].kwargs["content"])
         self.interaction.followup.send.assert_not_awaited()
 
     async def test_success_sends_private_alarm_panel_after_completion(self):
@@ -162,7 +179,7 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
             self.assertTrue(self.record()["verified"])
             self.assertEqual([call for call in self.interaction.edit_original_response.await_args_list if "embed" in call.kwargs][-1].kwargs["embed"].title, "✅ 인증 완료")
             self.assertTrue(kwargs["ephemeral"])
-            self.assertIn("알람 설정", kwargs["content"])
+            self.assertIsNone(kwargs["content"])
             self.assertEqual(kwargs["embed"].title, "🔔 알람 설정")
             self.assertIn("아티쟁 전략 공유", kwargs["embed"].description)
             self.assertEqual([button.label for button in kwargs["view"].children], ["필드보스", "시공", "어비스"])

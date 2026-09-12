@@ -119,8 +119,8 @@ class VoiceRooms(commands.Cog):
         if len(rooms) >= 50:
             logger.warning("개인 음성방 한도(50개): guild=%s", guild.id)
             return
-        parent = trigger.category or trigger
-        overwrites = parent.overwrites.copy()
+        # Preserve channel-specific restrictions as well as category defaults.
+        overwrites = trigger.overwrites.copy()
         owner_permissions = overwrites.get(member, discord.PermissionOverwrite())
         owner_permissions.update(view_channel=True, connect=True, speak=True, send_messages=True)
         overwrites[member] = owner_permissions

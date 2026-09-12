@@ -87,7 +87,8 @@ class ArtifactTests(unittest.IsolatedAsyncioTestCase):
             await cog._check_artifact_result(datetime.datetime(2026, 9, 9, 22, 30, tzinfo=a.KST))
         guild.get_channel.assert_called_with(1547489396301762640)
         channel.send.assert_awaited_once()
-        self.assertIn("이번 회차", channel.send.await_args.kwargs["content"])
+        self.assertIsNone(channel.send.await_args.kwargs["content"])
+        self.assertIn("이번 회차", channel.send.await_args.kwargs["embed"].fields[0].name)
 
 
 class VoiceTests(unittest.IsolatedAsyncioTestCase):
@@ -105,6 +106,15 @@ class VoiceTests(unittest.IsolatedAsyncioTestCase):
         self.member = Mock(id=2, bot=False, guild=self.guild, display_name="테스트", move_to=AsyncMock())
         self.member.voice = SimpleNamespace(channel=self.trigger)
         self.cog.save(1, {"enabled": True, "trigger_channel_id": 10})
+
+    async def test_voice_creation_preserves_trigger_overwrites(self):
+        role = Mock(id=999)
+        self.trigger.category = Mock(overwrites={})
+        self.trigger.overwrites = {role: discord.PermissionOverwrite(connect=False, view_channel=False)}
+        await self.cog.create_room(self.member, self.trigger)
+        permissions = self.guild.create_voice_channel.await_args.kwargs['overwrites'][role]
+        self.assertFalse(permissions.connect)
+        self.assertFalse(permissions.view_channel)
 
     async def test_creation_and_reentry_reuses_room(self):
         await self.cog.create_room(self.member, self.trigger)

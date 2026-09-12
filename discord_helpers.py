@@ -7,6 +7,7 @@ from server_scope import allowed_guild
 
 logger = logging.getLogger(__name__)
 TICKETS_IN_FLIGHT = set()
+ROLE_UPDATES_IN_FLIGHT = set()
 
 
 def embed_text(embed: discord.Embed, limit: int = 1900) -> str:
@@ -88,14 +89,22 @@ async def toggle_role(interaction, guild_id, role_id):
     role = interaction.guild.get_role(role_id)
     if role is None or not role.is_assignable() or not interaction.guild.me.guild_permissions.manage_roles:
         return await respond(interaction, "알람 역할을 관리할 수 없어요. 봇 권한과 역할 순서를 확인해주세요.")
-    await interaction.response.defer(ephemeral=True, thinking=True)
-    if role in interaction.user.roles:
-        await interaction.user.remove_roles(role, reason="알람 역할 해제")
-        message = f"✅ {role.mention} 역할을 해제했어요."
-    else:
-        await interaction.user.add_roles(role, reason="알람 역할 선택")
-        message = f"✅ {role.mention} 역할을 받았어요."
-    await interaction.followup.send(message, ephemeral=True)
+    key = (guild_id, interaction.user.id, role_id)
+    if key in ROLE_UPDATES_IN_FLIGHT:
+        return await respond(interaction, "역할을 변경 중이에요. 잠시 기다려주세요.")
+    ROLE_UPDATES_IN_FLIGHT.add(key)
+    try:
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        if role in interaction.user.roles:
+            await interaction.user.remove_roles(role, reason="알람 역할 해제")
+            message = f"✅ {role.mention} 역할을 해제했어요."
+        else:
+            await interaction.user.add_roles(role, reason="알람 역할 선택")
+            message = f"✅ {role.mention} 역할을 받았어요."
+        await interaction.followup.send(message, ephemeral=True)
+    finally:
+        ROLE_UPDATES_IN_FLIGHT.discard(key)
+
 
 
 class TicketCloseView(SafeView):

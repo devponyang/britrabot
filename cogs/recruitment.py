@@ -1,6 +1,7 @@
 import asyncio
 import datetime as dt
 import logging
+import time
 
 import discord
 from discord import app_commands
@@ -14,6 +15,8 @@ from cogs.coupons import KST, parse_expiry
 FILE = BASE_DIR / 'recruitment.json'
 logger = logging.getLogger(__name__)
 LABELS = {'party': '파티 모집', 'legion': '레기온 홍보'}
+PANEL_CHANNEL_ID = 1548041064961810482
+POST_CHANNEL_IDS = {'party': 1547063601611804803, 'legion': 1547063786320568350}
 
 
 def is_closed(row):
@@ -80,21 +83,24 @@ class RecruitModal(discord.ui.Modal):
                     return await respond(interaction, '이미 진행 중인 모집글이 있어요. 먼저 해당 글을 종료해주세요.')
                 row.update(changes)
             else:
-                panel = data.get('panels', {}).get(self.kind)
-                if not panel or panel['channel_id'] != interaction.channel_id:
+                panel = data.get('panel')
+                if not panel or interaction.channel_id != PANEL_CHANNEL_ID or panel['channel_id'] != PANEL_CHANNEL_ID:
                     return await respond(interaction, '관리자가 지정한 최신 패널 채널에서 이용해주세요.')
                 if any(row['owner'] == interaction.user.id and row['kind'] == self.kind and not is_closed(row) for row in posts.values()):
                     return await respond(interaction, '진행 중인 모집글이 있어요. 기존 글을 수정하거나 종료해주세요.')
                 if self.kind == 'legion' and any(row['kind'] == 'legion' and not is_closed(row) and row['title'].casefold() == title.casefold() for row in posts.values()):
                     return await respond(interaction, '같은 이름의 레기온 홍보글이 이미 있어요.')
-                row = dict(changes, kind=self.kind, owner=interaction.user.id, members=[interaction.user.id], closed=False, channel_id=interaction.channel_id)
-                message = await interaction.channel.send(embed=post_embed(row), view=PostView(self.cog, self.kind), allowed_mentions=discord.AllowedMentions.none())
+                destination = interaction.guild.get_channel(POST_CHANNEL_IDS[self.kind])
+                if destination is None:
+                    return await respond(interaction, '모집글 게시 채널을 찾을 수 없어요. 관리자에게 문의해주세요.')
+                row = dict(changes, kind=self.kind, owner=interaction.user.id, members=[interaction.user.id], closed=False, channel_id=destination.id)
+                message = await destination.send(embed=post_embed(row), view=PostView(self.cog, self.kind), allowed_mentions=discord.AllowedMentions.none())
                 posts[str(message.id)] = row
             save_json(FILE, data)
             if self.message_id:
                 await self.cog.refresh_post(interaction.guild, self.message_id, row)
                 save_json(FILE, data)
-        await respond(interaction, '✅ 모집글을 반영했어요.')
+        await respond(interaction, f"✅ <#{row['channel_id']}>에 모집글을 반영했어요.")
 
     async def on_error(self, interaction, error):
         logger.error('모집 입력 처리 실패', exc_info=error)
@@ -102,16 +108,17 @@ class RecruitModal(discord.ui.Modal):
 
 
 class PanelView(SafeView):
-    def __init__(self, cog, kind):
+    def __init__(self, cog):
         super().__init__(timeout=None)
-        button = discord.ui.Button(label=LABELS[kind] + ' 작성', style=discord.ButtonStyle.primary, custom_id=f'recruit:panel:{kind}')
-        async def clicked(interaction):
-            panel = load_json(FILE).get('panels', {}).get(kind)
-            if not panel or panel['message_id'] != interaction.message.id:
-                return await respond(interaction, '새로 설치된 패널을 이용해주세요.')
-            await interaction.response.send_modal(RecruitModal(cog, kind))
-        button.callback = clicked
-        self.add_item(button)
+        for kind in LABELS:
+            button = discord.ui.Button(label=LABELS[kind] + ' 작성', style=discord.ButtonStyle.primary, custom_id=f'recruit:panel:{kind}')
+            async def clicked(interaction, kind=kind):
+                panel = load_json(FILE).get('panel')
+                if interaction.channel_id != PANEL_CHANNEL_ID or not panel or panel['message_id'] != interaction.message.id:
+                    return await respond(interaction, f'통합 패널 <#{PANEL_CHANNEL_ID}>을 이용해주세요.')
+                await interaction.response.send_modal(RecruitModal(cog, kind))
+            button.callback = clicked
+            self.add_item(button)
 
 
 class PostView(SafeView):
@@ -130,10 +137,11 @@ class PostView(SafeView):
 class Recruitment(commands.Cog):
     def __init__(self, bot):
         self.bot, self.lock = bot, asyncio.Lock()
+        self._last_audit = -1000.0
 
     async def cog_load(self):
+        self.bot.add_view(PanelView(self))
         for kind in LABELS:
-            self.bot.add_view(PanelView(self, kind))
             self.bot.add_view(PostView(self, kind))
         self.refresh.start()
 
@@ -147,15 +155,20 @@ class Recruitment(commands.Cog):
     def can_manage(interaction, row):
         return interaction.user.id == row['owner'] or interaction.user.guild_permissions.administrator
 
-    async def refresh_post(self, guild, message_id, row):
+    async def refresh_post(self, guild, message_id, row, *, audit=False):
         embed = post_embed(row)
         signature = str(embed.to_dict())
-        if row.get('signature') == signature:
+        unchanged = row.get('signature') == signature
+        if unchanged and not audit:
             return
         channel = guild.get_channel(row['channel_id'])
         if channel is None:
-            return
+            if not audit:
+                return
+            channel = await guild.fetch_channel(row['channel_id'])
         message = await channel.fetch_message(int(message_id))
+        if unchanged:
+            return
         await message.edit(content=None, embed=embed, view=PostView(self, row['kind']))
         row['signature'] = signature
 
@@ -196,37 +209,55 @@ class Recruitment(commands.Cog):
             save_json(FILE, data)
         await respond(interaction, '✅ 모집글을 갱신했어요.')
 
-    @app_commands.command(name='모집패널설정', description='파티·레기온용 채널에 버튼 패널을 설치합니다. 채널 생략 시 새로 만듭니다.')
+    @app_commands.command(name='모집패널설정', description='지정된 채널에 파티·레기온 통합 모집 패널 하나를 설치합니다.')
     @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
-    @app_commands.choices(kind=[app_commands.Choice(name='파티 모집', value='party'), app_commands.Choice(name='레기온 홍보', value='legion')])
-    @app_commands.describe(kind='설치할 패널 종류', channel='기존 채널을 쓰려면 선택, 생략하면 전용 채널 생성')
-    async def panel(self, interaction: discord.Interaction, kind: app_commands.Choice[str], channel: discord.TextChannel | None = None):
+    async def panel(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
         async with self.lock:
             data = load_json(FILE)
-            existing = data.setdefault('panels', {}).get(kind.value)
-            channel = channel or (interaction.guild.get_channel(existing['channel_id']) if existing else None)
+            channel = interaction.guild.get_channel(PANEL_CHANNEL_ID)
             if channel is None:
-                channel = await interaction.guild.create_text_channel(LABELS[kind.value].replace(' ', '-'), reason='모집 버튼 패널 설치')
-            embed = discord.Embed(title=LABELS[kind.value], description='아래 버튼을 눌러 모집글을 작성해주세요.\n진행 중인 글은 종류별로 한 사람당 하나씩 작성할 수 있어요.\n게시된 글의 버튼으로 참가·수정·종료를 진행합니다.' if kind.value == 'party' else '아래 버튼을 눌러 레기온을 소개해주세요.\n이름·성향·가입 조건·주 활동 시간·문의 방법을 적어주세요.\n기존 글은 수정해서 사용하고 모집이 끝나면 종료해주세요.', color=discord.Color.blurple())
+                return await respond(interaction, '통합 패널 채널을 찾을 수 없어요. 채널 보기 권한을 확인해주세요.')
+            existing = data.get('panel')
+            embed = discord.Embed(title='📋 파티 모집 · 레기온 홍보', description=(
+                '아래 버튼을 눌러 모집글을 작성해주세요.\n\n'
+                f'⚔️ **파티 모집** → <#{POST_CHANNEL_IDS["party"]}>\n'
+                f'🛡️ **레기온 홍보** → <#{POST_CHANNEL_IDS["legion"]}>\n\n'
+                '작성한 글은 해당 채널에 게시됩니다. 참가·수정·종료는 게시된 글의 버튼을 이용해주세요.'), color=discord.Color.blurple())
             message = None
-            if existing and existing['channel_id'] == channel.id:
+            if existing and existing['channel_id'] == PANEL_CHANNEL_ID:
                 try:
                     message = await channel.fetch_message(existing['message_id'])
-                    await message.edit(content=None, embed=embed, view=PanelView(self, kind.value))
+                    await message.edit(content=None, embed=embed, view=PanelView(self))
                 except discord.NotFound:
                     pass
             if message is None:
-                message = await channel.send(embed=embed, view=PanelView(self, kind.value))
-            data['panels'][kind.value] = {'channel_id': channel.id, 'message_id': message.id}
+                message = await channel.send(embed=embed, view=PanelView(self))
+            data['panel'] = {'channel_id': channel.id, 'message_id': message.id}
+            save_json(FILE, data)
+            # Remove only the old panel messages tracked by this feature.
+            for kind, old in list(data.get('panels', {}).items()):
+                old_channel = interaction.guild.get_channel(old['channel_id'])
+                if old_channel is None:
+                    continue
+                try:
+                    old_message = await old_channel.fetch_message(old['message_id'])
+                    if old_message.id != message.id:
+                        await old_message.delete()
+                    del data['panels'][kind]
+                except discord.NotFound:
+                    del data['panels'][kind]
+                except discord.HTTPException:
+                    logger.exception('기존 모집 패널 정리 실패: %s', old['message_id'])
             save_json(FILE, data)
             try:
-                await message.pin(reason='모집 안내 패널')
+                await message.pin(reason='통합 모집 안내 패널')
             except discord.HTTPException:
                 logger.warning('모집 패널 고정 실패: %s', message.id)
-        await respond(interaction, f'✅ {channel.mention}에 패널을 설치했어요. 사용자는 버튼으로 이용하면 됩니다.')
+        pending = bool(data.get('panels'))
+        await respond(interaction, f'✅ <#{PANEL_CHANNEL_ID}>에 통합 패널을 설치했어요.' + ('\n기존 패널 일부를 정리하지 못했어요. 권한 확인 후 명령을 다시 실행해주세요. 이전 버튼은 사용할 수 없습니다.' if pending else ''))
 
     @tasks.loop(minutes=1)
     async def refresh(self):
@@ -236,9 +267,12 @@ class Recruitment(commands.Cog):
         try:
             async with self.lock:
                 data = load_json(FILE)
+                audit = time.monotonic() - self._last_audit >= 300
+                if audit:
+                    self._last_audit = time.monotonic()
                 for message_id, row in list(data.get('posts', {}).items()):
                     try:
-                        await self.refresh_post(guild, message_id, row)
+                        await self.refresh_post(guild, message_id, row, audit=audit)
                     except discord.NotFound:
                         del data['posts'][message_id]
                     except discord.HTTPException:

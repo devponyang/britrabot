@@ -42,6 +42,14 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(saved["records"]), 2)
         self.assertIn("record", saved)
 
+    def test_partial_artifact_refresh_preserves_table_details(self):
+        base = {'pair': '브리트라 VS 상대', 'source_url': 'https://example.org', 'records': [{'date': '2026-09-09', 'round': '1차전', 'scores': ['2:4'], 'cells': ['details'], 'images': ['icon'], 'total_score': '2:4'}]}
+        a.save_artifact_history(base)
+        a.save_artifact_history({**base, 'records': [{**base['records'][0], 'cells': [], 'images': [], 'total_score': None}]})
+        row = a.load_artifact_history(base['pair'])['records'][0]
+        self.assertEqual(row['cells'], ['details'])
+        self.assertEqual(row['total_score'], '2:4')
+
     async def test_notice_initialization_survives_missing_config(self):
         articles = [{"url": "https://example.org/one", "category": "공지", "title": "one"}]
         with patch.object(a.aion2_scraper, "get_latest_official_articles", new=AsyncMock(return_value=articles)):
@@ -72,6 +80,26 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
             await a.Automation(self.bot).alarm_loop()
             scrape.assert_not_awaited()
         self.channel.send.assert_awaited_once()
+
+    async def test_alarm_has_only_role_ping_and_one_embed(self):
+        a.set_guild_config(self.guild.id, 'alarm_channel', 50)
+        clock = Mock(wraps=datetime.datetime)
+        clock.now.return_value = datetime.datetime(2026, 9, 10, 9, 0, tzinfo=a.KST)
+        with patch.object(a, 'datetime', Mock(wraps=datetime, datetime=clock)):
+            await self.cog.alarm_loop()
+        kwargs = self.channel.send.await_args.kwargs
+        self.assertEqual(kwargs['content'], '<@&123>')
+        self.assertIsInstance(kwargs['embed'], discord.Embed)
+        self.assertFalse(kwargs['allowed_mentions'].everyone)
+
+    async def test_muted_alarm_has_no_plain_text(self):
+        a.set_guild_config(self.guild.id, 'alarm_channel', 50)
+        a.set_guild_config(self.guild.id, 'alarm_ping_mode', 'none')
+        clock = Mock(wraps=datetime.datetime)
+        clock.now.return_value = datetime.datetime(2026, 9, 10, 9, 0, tzinfo=a.KST)
+        with patch.object(a, 'datetime', Mock(wraps=datetime, datetime=clock)):
+            await self.cog.alarm_loop()
+        self.assertIsNone(self.channel.send.await_args.kwargs['content'])
 
     async def test_failed_alarm_retries_in_catchup_window(self):
         a.set_guild_config(self.guild.id, "alarm_channel", 50)

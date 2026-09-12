@@ -127,12 +127,32 @@ class Coupons(commands.Cog):
             await self.update_messages(data)
             ref = next((ref for ref in data['messages'] if ref['channel_id'] == interaction.channel_id), None)
             if ref:
+                if ref.get('signature') != str(coupon_embed(data).to_dict()):
+                    return await interaction.followup.send('기존 쿠폰 메시지를 갱신하지 못했어요. 봇의 메시지·임베드·기록 보기 권한을 확인해주세요. 1분마다 재시도합니다.', ephemeral=True)
                 return await interaction.followup.send(f"✅ 이 채널의 기존 쿠폰 정보 메시지를 사용합니다: https://discord.com/channels/{interaction.guild_id}/{ref['channel_id']}/{ref['message_id']}", ephemeral=True)
             embed = coupon_embed(data)
             message = await interaction.channel.send(embed=embed, allowed_mentions=discord.AllowedMentions.none())
             data['messages'].append({'channel_id': interaction.channel_id, 'message_id': message.id, 'signature': str(embed.to_dict())})
             save_json(FILE, data)
         await interaction.followup.send('✅ 쿠폰 정보 메시지를 게시했어요. 이후 등록 내용은 이 메시지에 반영됩니다.', ephemeral=True)
+
+    @app_commands.command(name='쿠폰삭제', description='잘못 등록한 쿠폰을 삭제하고 기존 정보 메시지를 갱신합니다.')
+    @app_commands.guild_only()
+    @app_commands.default_permissions(administrator=True)
+    @app_commands.checks.has_permissions(administrator=True)
+    @app_commands.describe(code='삭제할 쿠폰 번호')
+    async def remove(self, interaction: discord.Interaction, code: str):
+        await interaction.response.defer(ephemeral=True, thinking=True)
+        async with self.lock:
+            data = load_json(FILE)
+            coupons = data.setdefault('coupons', {})
+            existing = next((key for key in coupons if key.casefold() == code.strip().casefold()), None)
+            if existing is None:
+                return await interaction.followup.send('등록된 쿠폰 번호를 찾을 수 없어요.', ephemeral=True)
+            del coupons[existing]
+            save_json(FILE, data)
+            failed = await self.update_messages(data)
+        await interaction.followup.send('✅ 쿠폰을 삭제했어요.' + (' 일부 메시지는 갱신에 실패해 1분마다 재시도합니다.' if failed else ' 기존 정보 메시지도 갱신했어요.'), ephemeral=True)
 
     @tasks.loop(minutes=1)
     async def refresh(self):

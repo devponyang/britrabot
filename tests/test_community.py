@@ -99,7 +99,7 @@ class CommunityTests(unittest.IsolatedAsyncioTestCase):
     def test_new_views_are_persistent(self):
         cog = r.Recruitment(self.bot)
         for kind in r.LABELS:
-            self.assertTrue(r.PanelView(cog, kind).is_persistent())
+            self.assertTrue(r.PanelView(cog).is_persistent())
             self.assertTrue(r.PostView(cog, kind).is_persistent())
 
     def test_coupon_embed_stays_within_discord_limits(self):
@@ -107,3 +107,100 @@ class CommunityTests(unittest.IsolatedAsyncioTestCase):
         embed = c.coupon_embed(data)
         self.assertLessEqual(len(embed), 6000)
         self.assertEqual(len(embed.fields), 25)
+
+    async def test_unified_panel_has_two_buttons_and_reuses_message(self):
+        self.channel.id = r.PANEL_CHANNEL_ID
+        self.message.pin = AsyncMock()
+        cog = r.Recruitment(self.bot)
+        await r.Recruitment.panel.callback(cog, self.interaction)
+        await r.Recruitment.panel.callback(cog, self.interaction)
+        self.channel.send.assert_awaited_once()
+        view = self.channel.send.await_args.kwargs['view']
+        self.assertEqual([button.label for button in view.children], ['파티 모집 작성', '레기온 홍보 작성'])
+        self.assertEqual(r.load_json(r.FILE)['panel']['channel_id'], r.PANEL_CHANNEL_ID)
+
+    async def test_posts_route_to_separate_channels_from_unified_panel(self):
+        cog = r.Recruitment(self.bot)
+        self.interaction.channel_id = r.PANEL_CHANNEL_ID
+        for kind, destination_id in r.POST_CHANNEL_IDS.items():
+            r.save_json(r.FILE, {'panel': {'channel_id': r.PANEL_CHANNEL_ID, 'message_id': 100}})
+            destination = Mock(id=destination_id, send=AsyncMock(return_value=self.message))
+            self.guild.get_channel.return_value = destination
+            modal = r.RecruitModal(cog, kind)
+            modal.subject = SimpleNamespace(value='모집 제목')
+            modal.details = SimpleNamespace(value='모집 설명')
+            if kind == 'party':
+                modal.capacity = SimpleNamespace(value='6')
+                modal.starts = SimpleNamespace(value=self.future)
+            await modal.on_submit(self.interaction)
+            self.guild.get_channel.assert_called_with(destination_id)
+            destination.send.assert_awaited_once()
+            self.assertEqual(r.load_json(r.FILE)['posts']['100']['channel_id'], destination_id)
+        self.channel.send.assert_not_awaited()
+
+    async def test_old_panel_button_cannot_open_modal(self):
+        r.save_json(r.FILE, {'panel': {'channel_id': r.PANEL_CHANNEL_ID, 'message_id': 200}})
+        self.interaction.response.send_modal = AsyncMock()
+        self.interaction.channel_id = r.PANEL_CHANNEL_ID
+        await r.PanelView(r.Recruitment(self.bot)).children[0].callback(self.interaction)
+        self.interaction.response.send_modal.assert_not_awaited()
+
+    async def test_deleted_post_removed_even_when_content_unchanged(self):
+        row = self.row()
+        row['signature'] = str(r.post_embed(row).to_dict())
+        r.save_json(r.FILE, {'posts': {'100': row}})
+        self.channel.fetch_message.side_effect = discord.NotFound(Mock(status=404, reason='Not Found'), 'gone')
+        cog = r.Recruitment(self.bot)
+        await cog.refresh()
+        self.assertEqual(r.load_json(r.FILE)['posts'], {})
+
+    async def test_audit_reads_but_does_not_edit_unchanged_post(self):
+        row = self.row()
+        row['signature'] = str(r.post_embed(row).to_dict())
+        cog = r.Recruitment(self.bot)
+        await cog.refresh_post(self.guild, 100, row, audit=True)
+        self.channel.fetch_message.assert_awaited_once()
+        self.message.edit.assert_not_awaited()
+
+    async def test_coupon_delete_updates_existing_embed(self):
+        c.save_json(c.FILE, {'coupons': {'CODE': c.parse_expiry(self.future).isoformat()}, 'messages': [{'channel_id': 10, 'message_id': 100}]})
+        await c.Coupons.remove.callback(c.Coupons(self.bot), self.interaction, 'code')
+        self.assertEqual(c.load_json(c.FILE)['coupons'], {})
+        self.message.edit.assert_awaited_once()
+        self.assertIn('등록된 쿠폰이 없습니다', self.message.edit.await_args.kwargs['embed'].description)
+
+    async def test_role_double_click_is_ignored_and_lock_released(self):
+        from discord_helpers import toggle_role, ROLE_UPDATES_IN_FLIGHT
+        started, release = asyncio.Event(), asyncio.Event()
+        role = Mock(id=123, mention='<@&123>', is_assignable=Mock(return_value=True))
+        self.guild.get_role.return_value = role
+        self.interaction.user.roles = []
+        async def add(*args, **kwargs):
+            started.set()
+            await release.wait()
+        self.interaction.user.add_roles = AsyncMock(side_effect=add)
+        self.interaction.user.remove_roles = AsyncMock()
+        first = asyncio.create_task(toggle_role(self.interaction, self.guild.id, 123))
+        await started.wait()
+        await toggle_role(self.interaction, self.guild.id, 123)
+        release.set()
+        await first
+        self.interaction.user.add_roles.assert_awaited_once()
+        self.assertFalse(ROLE_UPDATES_IN_FLIGHT)
+
+    async def test_role_failure_releases_lock(self):
+        from discord_helpers import toggle_role, ROLE_UPDATES_IN_FLIGHT
+        self.guild.get_role.return_value = Mock(id=123, is_assignable=Mock(return_value=True))
+        self.interaction.user.roles = []
+        self.interaction.user.add_roles = AsyncMock(side_effect=RuntimeError('failed'))
+        with self.assertRaises(RuntimeError):
+            await toggle_role(self.interaction, self.guild.id, 123)
+        self.assertFalse(ROLE_UPDATES_IN_FLIGHT)
+
+    async def test_coupon_info_does_not_claim_success_on_failed_edit(self):
+        c.save_json(c.FILE, {'messages': [{'channel_id': 10, 'message_id': 100}]})
+        self.message.edit.side_effect = discord.Forbidden(Mock(status=403, reason='Forbidden'), 'denied')
+        with self.assertLogs(c.logger, level='ERROR'):
+            await c.Coupons.info.callback(c.Coupons(self.bot), self.interaction)
+        self.assertIn('갱신하지 못했어요', self.interaction.followup.send.await_args.args[0])
+        self.channel.send.assert_not_awaited()

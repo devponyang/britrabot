@@ -13,7 +13,7 @@ import aion2_scraper
 import verify
 from storage import load_json, save_json
 from alarm_settings import ALARM_ROLE_GUILD_ID, ALARM_ROLE_IDS, ALARM_ROLE_GROUPS
-from discord_helpers import SafeView, SafeModal, open_ticket, TicketCloseView, toggle_role, purge_messages, send_embed_pages, embed_text
+from discord_helpers import SafeView, SafeModal, open_ticket, TicketCloseView, toggle_role, purge_messages, send_embed_pages
 
 logger = logging.getLogger(__name__)
 
@@ -141,7 +141,13 @@ def save_artifact_history(history: dict):
     data = load_json(ARTIFACT_RECORDS_FILE)
     previous = data.get(history["pair"]) or load_artifact_history(history["pair"]) or {}
     records = {(item["date"], item["round"]): item for item in previous.get("records", [])}
-    records.update({(item["date"], item["round"]): item for item in history["records"]})
+    for item in history["records"]:
+        key = (item["date"], item["round"])
+        # Current-card summaries contain empty cells/images; keep the detailed table.
+        records[key] = {**records.get(key, {}), **{
+            field: value for field, value in item.items()
+            if value is not None and value != []
+        }}
     saved_history = {
         **previous,
         "updated_at": datetime.datetime.now(KST).isoformat(),
@@ -178,6 +184,7 @@ def load_artifact_history(pair: str) -> dict | None:
                 ":".join(reversed(score.split(":"))) if ":" in score else score
                 for score in record.get("scores", [])
             ],
+            "total_score": ":".join(reversed(record["total_score"].split(":"))) if record.get("total_score") else None,
         }
         for record in history.get("records", [])
     ]
@@ -427,7 +434,7 @@ class AdminPanelChannelSelect(discord.ui.ChannelSelect):
             return
         channel = self.values[0]
         set_guild_config(interaction.guild.id, self.setting_key, channel.id)
-        await interaction.response.edit_message(content=embed_text(build_admin_panel_embed(interaction.guild)), embed=build_admin_panel_embed(interaction.guild), view=self.view)
+        await interaction.response.edit_message(content=None, embed=build_admin_panel_embed(interaction.guild), view=self.view)
         await interaction.followup.send(f"✅ {self.label} 채널을 {channel.mention} 으로 설정했어요.", ephemeral=True)
 
 
@@ -447,7 +454,7 @@ class AdminPanelRoleSelect(discord.ui.RoleSelect):
             return
         role = self.values[0]
         set_guild_config(interaction.guild.id, "alarm_ping_role", role.id)
-        await interaction.response.edit_message(content=embed_text(build_admin_panel_embed(interaction.guild)), embed=build_admin_panel_embed(interaction.guild), view=self.view)
+        await interaction.response.edit_message(content=None, embed=build_admin_panel_embed(interaction.guild), view=self.view)
         await interaction.followup.send(f"✅ 알람 멘션 역할을 {role.mention} 으로 설정했어요.", ephemeral=True)
 
 
@@ -520,7 +527,7 @@ class VerificationRoleSelect(discord.ui.RoleSelect):
         if problem:
             return await interaction.response.send_message(problem, ephemeral=True)
         verify.set_guild_config(interaction.guild.id, "role_id", role.id)
-        await interaction.response.edit_message(content=embed_text(build_verification_admin_embed(interaction.guild)), embed=build_verification_admin_embed(interaction.guild), view=self.view)
+        await interaction.response.edit_message(content=None, embed=build_verification_admin_embed(interaction.guild), view=self.view)
         await interaction.followup.send(f"✅ 인증 완료 역할을 {role.mention} 으로 설정했어요.", ephemeral=True)
 
 
@@ -579,7 +586,7 @@ class VerificationAdminView(SafeView):
             color=discord.Color.blue(),
         )
         await interaction.response.defer(ephemeral=True, thinking=True)
-        await interaction.channel.send(content=embed_text(embed), embed=embed, view=verify.VerifyPanelView())
+        await interaction.channel.send(content=None, embed=embed, view=verify.VerifyPanelView())
         await interaction.followup.send(
             f"✅ 인증 패널을 게시했어요. 대상 서버: **{config['target_server']}**", ephemeral=True
         )
@@ -609,7 +616,7 @@ class AdminPanelView(SafeView):
 
     @discord.ui.button(label="인증 관리", style=discord.ButtonStyle.primary, custom_id="adminpanel:verify_open", row=2)
     async def verification_admin(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.send_message(content=embed_text(build_verification_admin_embed(interaction.guild)), embed=build_verification_admin_embed(interaction.guild), view=VerificationAdminView(), ephemeral=True)
+        await interaction.response.send_message(content=None, embed=build_verification_admin_embed(interaction.guild), view=VerificationAdminView(), ephemeral=True)
 
     @discord.ui.button(label="아티팩트 상대 서버", style=discord.ButtonStyle.secondary, emoji="🏺", custom_id="adminpanel:artifact_opponent", row=4)
     async def set_artifact_opponent(self, interaction: discord.Interaction, button: discord.ui.Button):
@@ -623,13 +630,13 @@ class AdminPanelView(SafeView):
             color=discord.Color.blurple(),
         )
         await interaction.response.defer(ephemeral=True, thinking=True)
-        await interaction.channel.send(content=embed_text(embed), embed=embed, view=AlarmMessagePanelView())
+        await interaction.channel.send(content=None, embed=embed, view=AlarmMessagePanelView())
         await interaction.followup.send("✅ 알람 문구 패널을 게시했어요.", ephemeral=True)
 
 
     @discord.ui.button(label="설정 새로고침", style=discord.ButtonStyle.secondary, emoji="🔄", custom_id="adminpanel:refresh", row=4)
     async def refresh(self, interaction: discord.Interaction, button: discord.ui.Button):
-        await interaction.response.edit_message(content=embed_text(build_admin_panel_embed(interaction.guild)), embed=build_admin_panel_embed(interaction.guild), view=self)
+        await interaction.response.edit_message(content=None, embed=build_admin_panel_embed(interaction.guild), view=self)
 
 
 class TicketView(SafeView):
@@ -710,7 +717,7 @@ class Automation(commands.Cog):
             try:
                 message = await channel.fetch_message(message_id)
                 await message.edit(
-                    content=embed_text(build_admin_panel_embed(guild)), embed=build_admin_panel_embed(guild),
+                    content=None, embed=build_admin_panel_embed(guild),
                     view=AdminPanelView(),
                 )
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
@@ -741,13 +748,13 @@ class Automation(commands.Cog):
         if message_id:
             try:
                 message = await channel.fetch_message(message_id)
-                await message.edit(content=embed_text(embed), embed=embed, view=AlarmRolePanelView())
+                await message.edit(content=None, embed=embed, view=AlarmRolePanelView())
                 return
             except (discord.NotFound, discord.Forbidden, discord.HTTPException):
                 pass
 
         try:
-            message = await channel.send(content=embed_text(embed), embed=embed, view=AlarmRolePanelView())
+            message = await channel.send(content=None, embed=embed, view=AlarmRolePanelView())
         except (discord.Forbidden, discord.HTTPException):
             logger.exception("알람 역할 패널 게시 실패: channel=%s", ALARM_ROLE_CHANNEL_ID)
             return
@@ -842,7 +849,7 @@ class Automation(commands.Cog):
                                       color=discord.Color.blurple(), timestamp=datetime.datetime.now(KST))
                 embed.set_footer(text="AION2 공식 홈페이지")
                 try:
-                    await channel.send(content=embed_text(embed), embed=embed)
+                    await channel.send(content=None, embed=embed)
                 except discord.HTTPException:
                     logger.exception("공지 전송 실패: guild=%s category=%s", guild.id, category)
                     continue
@@ -891,7 +898,7 @@ class Automation(commands.Cog):
                     else:
                         ping_role = default_ping_role
                     ping = ping_role if should_ping_alarm(guild_config.get("alarm_ping_mode", "important"), schedule_key) else None
-                    content = ((ping.mention + "\n") if ping else "") + embed_text(embed)
+                    content = ping.mention if ping else None
                     await channel.send(
                         content=content,
                         embed=embed,
@@ -988,7 +995,7 @@ class Automation(commands.Cog):
                     )
             embed.set_footer(text="아툴 비공식 참고용 통계 · 원본 보기")
             try:
-                await channel.send(content=embed_text(embed), embed=embed)
+                await channel.send(content=None, embed=embed)
                 set_guild_config(guild.id, "sent_artifact_result_keys", (sent + [result_key])[-100:])
                 result_saved = True
             except discord.HTTPException:
@@ -1039,7 +1046,7 @@ class Automation(commands.Cog):
         embed = discord.Embed(title="📅 다음 게임 일정", color=discord.Color.blurple())
         embed.description = "\n".join(f"**{name}** · <t:{int(when.timestamp())}:f> (<t:{int(when.timestamp())}:R>)" for when, name in sorted(upcoming)[:5])
         embed.set_footer(text="한국 시간(KST) 기준 · 게임 내 공지 우선")
-        await interaction.response.send_message(content=embed_text(embed), embed=embed, ephemeral=True)
+        await interaction.response.send_message(content=None, embed=embed, ephemeral=True)
 
     @app_commands.command(name="아티설정", description="브리트라의 아티팩트쟁 상대 서버를 설정합니다.")
     @app_commands.guild_only()
@@ -1162,7 +1169,7 @@ class Automation(commands.Cog):
     async def create_admin_panel(self, interaction: discord.Interaction):
         await interaction.response.defer(ephemeral=True, thinking=True)
         message = await interaction.channel.send(
-            content=embed_text(build_admin_panel_embed(interaction.guild)), embed=build_admin_panel_embed(interaction.guild),
+            content=None, embed=build_admin_panel_embed(interaction.guild),
             view=AdminPanelView(),
         )
         config = get_guild_config(interaction.guild.id)
@@ -1207,7 +1214,7 @@ class Automation(commands.Cog):
             color=discord.Color.blurple(),
         )
         await interaction.response.defer(ephemeral=True, thinking=True)
-        await interaction.channel.send(content=embed_text(embed), embed=embed, view=AlarmMessagePanelView())
+        await interaction.channel.send(content=None, embed=embed, view=AlarmMessagePanelView())
         await interaction.followup.send("✅ 알람 문구 설정 패널을 게시했어요.", ephemeral=True)
 
 
@@ -1238,7 +1245,7 @@ class Automation(commands.Cog):
             color=discord.Color.blurple(),
         )
         await interaction.response.defer(ephemeral=True, thinking=True)
-        await interaction.channel.send(content=embed_text(embed), embed=embed, view=TicketView())
+        await interaction.channel.send(content=None, embed=embed, view=TicketView())
         await interaction.followup.send("✅ 티켓 패널을 게시했어요.", ephemeral=True)
 
 
@@ -1282,7 +1289,7 @@ class Automation(commands.Cog):
                 )
                 embed.set_thumbnail(url=member.display_avatar.url)
                 embed.set_footer(text=f"현재 멤버 수: {member.guild.member_count}명")
-                await channel.send(content=embed_text(embed), embed=embed)
+                await channel.send(content=None, embed=embed)
 
         # 로그
         await self._log(
@@ -1304,7 +1311,7 @@ class Automation(commands.Cog):
                     color=discord.Color.dark_grey(),
                 )
                 embed.set_footer(text=f"현재 멤버 수: {member.guild.member_count}명")
-                await channel.send(content=embed_text(embed), embed=embed)
+                await channel.send(content=None, embed=embed)
 
         await self._log(member.guild, f"📤 **퇴장** {member} ({member.id})")
 
