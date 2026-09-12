@@ -2,6 +2,7 @@ import asyncio
 import datetime as dt
 import logging
 import time
+import re
 
 import discord
 from discord import app_commands
@@ -10,13 +11,31 @@ from discord.ext import commands, tasks
 from discord_helpers import SafeView, respond
 from server_scope import allowed_guild, ALLOWED_GUILD_ID
 from storage import BASE_DIR, load_json, save_json
-from cogs.coupons import KST, parse_expiry
+from cogs.coupons import KST
 
 FILE = BASE_DIR / 'recruitment.json'
 logger = logging.getLogger(__name__)
 LABELS = {'party': '파티 모집', 'legion': '레기온 홍보'}
 PANEL_CHANNEL_ID = 1548041064961810482
 POST_CHANNEL_IDS = {'party': 1547063601611804803, 'legion': 1547063786320568350}
+
+
+def parse_party_start(date_text, time_text):
+    date_text, time_text = date_text.strip(), time_text.strip()
+    if re.fullmatch(r'[0-9]{2,4}', date_text):
+        split = 1 if len(date_text) == 2 else len(date_text) - 2
+        month, day = int(date_text[:split]), int(date_text[split:])
+    elif re.fullmatch(r'[0-9]{1,2}[/.-][0-9]{1,2}', date_text):
+        month, day = map(int, re.split(r'[/.-]', date_text))
+    else:
+        raise ValueError('날짜 형식 오류')
+    if re.fullmatch(r'[0-9]{3,4}', time_text):
+        hour, minute = int(time_text[:-2]), int(time_text[-2:])
+    elif re.fullmatch(r'[0-9]{1,2}:[0-9]{2}', time_text):
+        hour, minute = map(int, time_text.split(':'))
+    else:
+        raise ValueError('시간 형식 오류')
+    return dt.datetime(2026, month, day, hour, minute, tzinfo=KST)
 
 
 def is_closed(row):
@@ -48,9 +67,12 @@ class RecruitModal(discord.ui.Modal):
         self.add_item(self.details)
         if kind == 'party':
             self.capacity = discord.ui.TextInput(label='모집자 포함 정원 (2~24명)', default=str(row['size']) if row else '6', max_length=2)
-            self.starts = discord.ui.TextInput(label='출발 시각: YYYY-MM-DD HH:MM (한국 시간)', default=dt.datetime.fromisoformat(row['starts']).strftime('%Y-%m-%d %H:%M') if row else None, max_length=16)
+            previous = dt.datetime.fromisoformat(row['starts']).astimezone(KST) if row else None
+            self.start_date = discord.ui.TextInput(label='출발 날짜 (2026년 고정)', placeholder='0912 또는 912 → 9월 12일 / 9/2도 가능', default=previous.strftime('%m%d') if previous else None, max_length=5)
+            self.start_time = discord.ui.TextInput(label='출발 시간 (한국 시간 · 24시간제)', placeholder='16:00 또는 1600 / 09:00 또는 900', default=previous.strftime('%H:%M') if previous else None, max_length=5)
             self.add_item(self.capacity)
-            self.add_item(self.starts)
+            self.add_item(self.start_date)
+            self.add_item(self.start_time)
 
     async def interaction_check(self, interaction):
         return allowed_guild(interaction.guild)
@@ -63,12 +85,12 @@ class RecruitModal(discord.ui.Modal):
         if self.kind == 'party':
             try:
                 size = int(self.capacity.value)
-                starts = parse_expiry(self.starts.value)
-                if len(self.starts.value.strip()) != 16 or not 2 <= size <= 24 or starts <= dt.datetime.now(KST):
+                starts = parse_party_start(self.start_date.value, self.start_time.value)
+                if not 2 <= size <= 24 or starts <= dt.datetime.now(KST):
                     raise ValueError()
                 changes.update(size=size, starts=starts.isoformat())
             except ValueError:
-                return await respond(interaction, '정원은 2~24명, 출발은 미래 시각을 YYYY-MM-DD HH:MM 형식으로 입력해주세요.')
+                return await respond(interaction, '정원은 2~24명입니다. 날짜는 0912·912 또는 9/12, 시간은 16:00·1600 형식으로 입력해주세요. 2026년의 실제 존재하는 날짜와 현재 이후 시각만 가능합니다.')
         await interaction.response.defer(ephemeral=True, thinking=True)
         async with self.cog.lock:
             data = load_json(FILE)
@@ -307,6 +329,31 @@ class Recruitment(commands.Cog):
                 channel = await guild.create_text_channel(f'레기온-문의-{interaction.user.id}', topic=topic, overwrites=overwrites, reason='레기온 작성자와 문의자 전용 대화')
             data.setdefault('inquiries', {})[topic] = channel.id
             save_json(FILE, data)
+            greetings = data.setdefault('inquiry_greetings', {})
+            if str(channel.id) not in greetings:
+                embed = discord.Embed(
+                    title=f"💬 {row['title']} · 레기온 가입 문의",
+                    description=(
+                        f"**문의자:** <@{interaction.user.id}>\n"
+                        f"**레기온 홍보 작성자:** <@{owner.id}>\n\n"
+                        "문의자님은 캐릭터 이름과 궁금한 내용을 남겨주세요.\n"
+                        "작성자님은 내용을 확인하고 이 채널에서 답변해주세요."
+                    ),
+                    url=f'https://discord.com/channels/{guild.id}/{row["channel_id"]}/{interaction.message.id}',
+                    color=discord.Color.blurple(),
+                )
+                embed.set_footer(text='작성자와 문의자 전용 대화 · 서버 관리자도 열람할 수 있습니다.')
+                try:
+                    greeting = await channel.send(
+                        content=f'<@{owner.id}> <@{interaction.user.id}>',
+                        embed=embed,
+                        allowed_mentions=discord.AllowedMentions(everyone=False, roles=False, users=[owner, interaction.user]),
+                    )
+                except discord.HTTPException:
+                    logger.exception('레기온 문의 안내 전송 실패: %s', channel.id)
+                    return await respond(interaction, f'문의 채널은 준비됐지만 멘션 안내를 보내지 못했어요: {channel.mention}\n봇의 메시지 보내기·임베드 링크 권한을 확인한 뒤 문의하기를 다시 눌러주세요.')
+                greetings[str(channel.id)] = greeting.id
+                save_json(FILE, data)
             await respond(interaction, f'✅ 문의 채널: {channel.mention}\n작성자와 본인이 대화할 수 있어요. 서버 관리자도 열람할 수 있습니다.')
 
     @app_commands.command(name='모집패널설정', description='지정된 채널에 파티·레기온 통합 모집 패널 하나를 설치합니다.')

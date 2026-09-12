@@ -131,7 +131,8 @@ class CommunityTests(unittest.IsolatedAsyncioTestCase):
             modal.details = SimpleNamespace(value='모집 설명')
             if kind == 'party':
                 modal.capacity = SimpleNamespace(value='6')
-                modal.starts = SimpleNamespace(value=self.future)
+                modal.start_date = SimpleNamespace(value='1231')
+                modal.start_time = SimpleNamespace(value='2359')
             await modal.on_submit(self.interaction)
             self.guild.get_channel.assert_called_with(destination_id)
             destination.send.assert_awaited_once()
@@ -226,13 +227,20 @@ class CommunityTests(unittest.IsolatedAsyncioTestCase):
         self.guild.text_channels = []
         owner = Mock(id=1)
         self.guild.get_member.return_value = owner
-        channel = Mock(id=300, mention='<#300>')
+        channel = Mock(id=300, mention='<#300>', send=AsyncMock(return_value=Mock(id=301)))
         self.guild.create_text_channel = AsyncMock(return_value=channel)
         self.guild.fetch_channel = AsyncMock(return_value=channel)
         cog = r.Recruitment(self.bot)
         await cog.inquiry(self.interaction)
         await cog.inquiry(self.interaction)
         self.guild.create_text_channel.assert_awaited_once()
+        channel.send.assert_awaited_once()
+        notice = channel.send.await_args.kwargs
+        self.assertEqual(notice['content'], '<@1> <@2>')
+        self.assertEqual(notice['allowed_mentions'].users, [owner, self.interaction.user])
+        self.assertFalse(notice['allowed_mentions'].everyone)
+        self.assertFalse(notice['allowed_mentions'].roles)
+        self.assertIn('/10/100', notice['embed'].url)
         overwrites = self.guild.create_text_channel.await_args.kwargs['overwrites']
         self.assertFalse(overwrites[self.guild.default_role].view_channel)
         self.assertTrue(overwrites[owner].view_channel)
@@ -246,3 +254,20 @@ class CommunityTests(unittest.IsolatedAsyncioTestCase):
         self.channel.fetch_message.assert_awaited_with(400)
         self.message.delete.assert_awaited_once()
         self.assertEqual(r.load_json(r.FILE)['posts'], {})
+
+    def test_party_separate_date_time_formats(self):
+        expected = dt.datetime(2026, 9, 12, 16, 0, tzinfo=c.KST)
+        for date in ('0912', '912', '9/12'):
+            for time in ('16:00', '1600'):
+                self.assertEqual(r.parse_party_start(date, time), expected)
+        self.assertEqual(r.parse_party_start('92', '900'), dt.datetime(2026, 9, 2, 9, 0, tzinfo=c.KST))
+        for date, time in [('0229', '1600'), ('0931', '1600'), ('1301', '1600'), ('912', '2400'), ('912', '1660'), ('912', '16')]:
+            with self.assertRaises(ValueError):
+                r.parse_party_start(date, time)
+
+    def test_party_modal_has_five_fields_and_edit_defaults(self):
+        row = {**self.row(), 'starts': '2026-09-12T16:00:00+09:00'}
+        modal = r.RecruitModal(r.Recruitment(self.bot), 'party', row, 100)
+        self.assertEqual(len(modal.children), 5)
+        self.assertEqual(modal.start_date.default, '0912')
+        self.assertEqual(modal.start_time.default, '16:00')
