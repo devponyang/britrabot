@@ -6,6 +6,14 @@ import aion2_scraper as s
 
 
 class ScraperTests(unittest.IsolatedAsyncioTestCase):
+    def test_power_units_and_decimals(self):
+        for text, expected in [('1M', 1000000), ('1.25M', 1250000), ('999k', 999000), ('450K', 450000), ('450', 450), ('1,000,000', 1000000), (' 1.05 m ', 1050000)]:
+            with self.subTest(text=text):
+                self.assertEqual(s.parse_power_level(text), expected)
+        for text in ('', '알 수 없음', '1B', '-1M', '1.2.3M', '1,2M', 'Lv 80 1M', None):
+            with self.subTest(text=text):
+                self.assertIsNone(s.parse_power_level(text))
+
     def test_code_is_exact_token(self):
         self.assertTrue(s.contains_code("인증: `Code123`", "Code123"))
         self.assertFalse(s.contains_code("OtherCode123", "Code123"))

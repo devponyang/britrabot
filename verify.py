@@ -28,7 +28,7 @@ LEGACY_ARTICLE_URL = (
 DEFAULT_ARTICLE_URL = LEGACY_ARTICLE_URL.replace("6a9a6c96feeef62e67566500", "6a9e37619ed1202b9b8fb310")
 DEFAULT_TARGET_SERVER = "브리트라"
 AUTOMATION_CONFIG_FILE = BASE_DIR / "guild_config.json"
-MIN_POWER_LEVEL = 450
+MIN_POWER_LEVEL = 450_000
 from alarm_settings import ALARM_ROLE_GUILD_ID, ALARM_ROLE_IDS, ALARM_ROLE_GROUPS
 from discord_helpers import SafeView, open_ticket, toggle_role
 ACTIVE_VERIFY_MESSAGES: dict[tuple[int, int], discord.WebhookMessage] = {}
@@ -390,7 +390,7 @@ class VerifyCodeView(SafeView):
             return await send_verification_failure(
                 interaction,
                 f"❌ `{char_info['nickname']}` 님의 전투력이 **{displayed_power_level}**이라 "
-                f"인증 기준({MIN_POWER_LEVEL} 이상)을 충족하지 못했어요.",
+                f"인증 기준({MIN_POWER_LEVEL:,} 이상)을 충족하지 못했어요.",
                 "전투력 기준 미달 또는 확인 불가",
             )
 
@@ -493,7 +493,7 @@ class Verify(commands.Cog):
             "인증이 완료되면 통합 디스코드의 모든 채널을 이용하실 수 있어요. 많은 이용 부탁드립니다! 🙏"
         )
         title = title.replace("브리트라", target_server)
-        description = description.replace("브리트라", target_server).replace("450", str(MIN_POWER_LEVEL))
+        description = description.replace("브리트라", target_server).replace("450", f"{MIN_POWER_LEVEL / 1000:g}K({MIN_POWER_LEVEL:,})")
         embed = discord.Embed(title=title[:256], description=description[:4096], color=discord.Color.blue())
         await interaction.response.defer(ephemeral=True, thinking=True)
         await interaction.channel.send(content=None, embed=embed, view=VerifyPanelView())

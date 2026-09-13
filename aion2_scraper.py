@@ -4,6 +4,7 @@ import asyncio
 import datetime
 import re
 import logging
+from decimal import Decimal
 from contextlib import asynccontextmanager
 from functools import wraps
 from urllib.parse import urlsplit, urlunsplit, urljoin
@@ -514,12 +515,24 @@ async def find_comment_by_code(article_url: str, code: str):
         raise ScrapeUnavailable("Comment scan limit reached; retry with a recent comment")
 
 
+def parse_power_level(text):
+    """Convert a complete displayed power value to base units; never drop a suffix."""
+    if not isinstance(text, str):
+        return None
+    match = re.fullmatch(r"\s*([0-9]+|[0-9]{1,3}(?:,[0-9]{3})+)(\.[0-9]+)?\s*([kKmM]?)\s*", text)
+    if not match:
+        return None
+    number = Decimal(match[1].replace(",", "") + (match[2] or ""))
+    value = number * {"": 1, "K": 1000, "M": 1000000}[match[3].upper()]
+    return int(value) if value == value.to_integral_value() else None
+
+
 async def get_character_info(profile_url: str):
     """
     댓글 작성자의 프로필 페이지(profile_url)를 렌더링해서
     닉네임/서버/종족/레기온을 반환합니다.
 
-    찾으면: {"nickname": "...", "server": "...", "race": "...", "legion": "...", "power_level": 450}
+    찾으면: {"nickname": "...", "server": "...", "race": "...", "legion": "...", "power_level": 450000}
     못 찾으면: None
     """
     if DUMMY_MODE:
@@ -528,7 +541,7 @@ async def get_character_info(profile_url: str):
             "server": "브리트라",
             "race": "마족",
             "legion": "더미레기온",
-            "power_level": 450,
+            "power_level": 450000,
         }
 
     if not is_official_url(profile_url):
@@ -593,9 +606,7 @@ async def get_character_info(profile_url: str):
         power_level = None
         if power_level_el:
             power_level_text = (await power_level_el.inner_text()).strip()
-            power_level_match = re.search(r"\d[\d,]*", power_level_text)
-            if power_level_match:
-                power_level = int(power_level_match.group().replace(",", ""))
+            power_level = parse_power_level(power_level_text)
 
         if not server:
             return None

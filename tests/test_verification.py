@@ -90,7 +90,7 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
             response=SimpleNamespace(defer=AsyncMock(), send_message=AsyncMock(), edit_message=AsyncMock()),
             followup=SimpleNamespace(send=AsyncMock()))
         self.comment = AsyncMock(return_value={"nickname": "test", "profile_url": "https://aion2.plaync.com/profile"})
-        self.character = AsyncMock(return_value={"nickname": "test", "server": "브리트라", "power_level": 450, "class_name": "검성"})
+        self.character = AsyncMock(return_value={"nickname": "test", "server": "브리트라", "power_level": 450000, "class_name": "검성"})
         for override in (patch.object(state, "CODE_FILE", self.path),
                          patch.object(verify, "get_guild_config", side_effect=lambda _: dict(self.config)),
                          patch.object(verify, "log_verification", new=AsyncMock()),
@@ -137,6 +137,32 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
         await self.check()
         view = self.interaction.edit_original_response.await_args.kwargs['view']
         self.assertIn(self.config['article_url'], [item.url for item in view.children])
+
+    async def test_exactly_450k_passes(self):
+        self.character.return_value['power_level'] = verify.aion2_scraper.parse_power_level('450K')
+        await self.check()
+        self.assertTrue(self.record()['verified'])
+        self.member.add_roles.assert_awaited_once()
+
+    async def test_449999_does_not_pass(self):
+        self.character.return_value['power_level'] = 449999
+        await self.check()
+        self.assertFalse(self.record()['verified'])
+        self.member.add_roles.assert_not_awaited()
+
+    async def test_unitless_450_does_not_pass(self):
+        self.character.return_value['power_level'] = verify.aion2_scraper.parse_power_level('450')
+        await self.check()
+        self.assertFalse(self.record()['verified'])
+        self.member.add_roles.assert_not_awaited()
+
+    async def test_million_power_passes_verification(self):
+        self.character.return_value['power_level'] = verify.aion2_scraper.parse_power_level('1M')
+        await self.check()
+        self.assertTrue(self.record()['verified'])
+        self.member.add_roles.assert_awaited_once()
+        embeds = [call.kwargs['embed'] for call in self.interaction.edit_original_response.await_args_list if 'embed' in call.kwargs]
+        self.assertEqual(next(field.value for field in embeds[-1].fields if field.name == '전투력'), '1,000,000')
 
     async def test_failure_reenables_button(self):
         self.comment.return_value = None
@@ -189,7 +215,7 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
         self.interaction.followup.send.assert_awaited_once()
 
     async def test_failed_verification_does_not_offer_alarm_roles(self):
-        self.character.return_value["power_level"] = 449
+        self.character.return_value["power_level"] = 449999
         with patch.object(verify, "ALARM_ROLE_GUILD_ID", self.guild.id):
             await self.check()
         self.interaction.followup.send.assert_not_awaited()
@@ -275,7 +301,7 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
         self.member.add_roles.assert_not_awaited()
 
     async def test_low_power_counts_failure(self):
-        self.character.return_value["power_level"] = 449
+        self.character.return_value["power_level"] = 449999
         await self.check()
         self.assertEqual(self.record()["attempts"], 1)
         self.member.add_roles.assert_not_awaited()
@@ -301,7 +327,7 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
     async def test_settings_change_during_lookup_prevents_grant(self):
         async def lookup(*args):
             self.config["target_server"] = "changed"
-            return {"nickname": "test", "server": "브리트라", "power_level": 450}
+            return {"nickname": "test", "server": "브리트라", "power_level": 450000}
         self.character.side_effect = lookup
         await self.check()
         self.member.add_roles.assert_not_awaited()
