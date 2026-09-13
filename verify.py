@@ -83,6 +83,11 @@ def verification_request(callback):
     async def guarded(self, interaction, button):
         if interaction.guild is None:
             return await interaction.response.send_message("서버 안에서 이용해주세요.", ephemeral=True)
+        if interaction.guild.id == 1545016047332237332:
+            if interaction.channel_id != 1548597197006831646:
+                return await interaction.response.send_message('인증은 <#1548597197006831646>에서 진행해주세요.', ephemeral=True)
+            if not any(role.id == 1547033362798084116 for role in interaction.user.roles):
+                return await interaction.response.send_message('먼저 <#1548597564918464613>에서 안내를 읽고 확인을 눌러주세요.', ephemeral=True)
         key = (interaction.guild.id, interaction.user.id)
         if key in IN_FLIGHT:
             return await interaction.response.send_message("⏳ 이미 인증을 처리 중이에요. 결과를 기다려주세요.", ephemeral=True)

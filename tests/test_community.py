@@ -351,3 +351,27 @@ class CommunityTests(unittest.IsolatedAsyncioTestCase):
         select = next(child for child in view.children if isinstance(child, discord.ui.Select))
         self.assertIn('필드보스', [option.value for option in select.options])
         self.assertEqual(select.max_values, 5)
+
+    async def test_guide_confirmation_grants_entry_role_and_private_link(self):
+        from cogs import verification_entry as entry
+        role = Mock(id=entry.ENTRY_ROLE, is_assignable=Mock(return_value=True))
+        self.guild.get_role.return_value = role
+        self.interaction.channel_id = entry.GUIDE_CHANNEL
+        self.interaction.user.roles = []
+        self.interaction.user.add_roles = AsyncMock()
+        with patch.object(entry.verify, 'get_guild_config', return_value={'role_id': 999}):
+            await entry.EntryView().confirm.callback(self.interaction)
+        self.interaction.user.add_roles.assert_awaited_once_with(role, reason='인증 방법 안내 확인 (인증 완료 아님)')
+        reply = self.interaction.followup.send.await_args.kwargs
+        self.assertTrue(reply['ephemeral'])
+        self.assertIn(str(entry.VERIFY_CHANNEL), reply['view'].children[0].url)
+        self.assertFalse(entry.PENDING)
+
+    async def test_guide_cannot_grant_final_verification_role(self):
+        from cogs import verification_entry as entry
+        self.interaction.channel_id = entry.GUIDE_CHANNEL
+        self.interaction.user.add_roles = AsyncMock()
+        with patch.object(entry.verify, 'get_guild_config', return_value={'role_id': entry.ENTRY_ROLE}):
+            await entry.EntryView().confirm.callback(self.interaction)
+        self.interaction.user.add_roles.assert_not_awaited()
+        self.assertFalse(entry.PENDING)
