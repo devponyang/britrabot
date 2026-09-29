@@ -50,6 +50,34 @@ class AutomationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(row['cells'], ['details'])
         self.assertEqual(row['total_score'], '2:4')
 
+    async def test_configured_opponent_is_not_replaced_by_recent_saved_opponent(self):
+        a.set_guild_config(self.guild.id, 'artifact_opponent_server', '나니아')
+        a.save_artifact_history({'pair': '브리트라 VS 네자칸', 'source_url': 'https://example.org', 'records': [{'date': '2026-09-19', 'round': '4차전', 'scores': ['2:4']}]})
+        interaction = SimpleNamespace(guild=self.guild, response=Mock(defer=AsyncMock()), followup=Mock(send=AsyncMock()))
+        with patch.object(self.cog, '_refresh_latest_result', AsyncMock(return_value=None)), patch.object(a.aion2_scraper, 'get_artifact_server_history', AsyncMock(return_value=None)) as fetch:
+            await a.Automation.check_artifact_record.callback(self.cog, interaction)
+        fetch.assert_awaited_once_with('나니아')
+        text = interaction.followup.send.await_args.args[0]
+        self.assertIn('나니아', text)
+        self.assertNotIn('네자칸', text)
+
+    async def test_explicit_opponent_overrides_setting_and_unrelated_live_result(self):
+        a.set_guild_config(self.guild.id, 'artifact_opponent_server', '나니아')
+        a.save_artifact_history({'pair': '브리트라 VS 루드라', 'source_url': 'https://example.org', 'records': [{'date': '2026-09-05', 'round': '4차전', 'scores': ['3:3']}]})
+        interaction = SimpleNamespace(guild=self.guild, response=Mock(defer=AsyncMock()), followup=Mock(send=AsyncMock()))
+        await a.Automation.check_artifact_record.callback(self.cog, interaction, '루드라')
+        self.assertIn('루드라', interaction.followup.send.await_args.kwargs['embed'].title)
+
+    async def test_configured_cached_result_is_not_labeled_live_for_other_opponent(self):
+        a.set_guild_config(self.guild.id, 'artifact_opponent_server', '나니아')
+        a.save_artifact_history({'pair': '브리트라 VS 나니아', 'source_url': 'https://example.org', 'records': [{'date': '2026-09-23', 'round': '1차전', 'scores': ['3:3']}]})
+        interaction = SimpleNamespace(guild=self.guild, response=Mock(defer=AsyncMock()), followup=Mock(send=AsyncMock()))
+        with patch.object(self.cog, '_refresh_latest_result', AsyncMock(return_value={'record': {'opponent_server': '네자칸'}})):
+            await a.Automation.check_artifact_record.callback(self.cog, interaction)
+        embed = interaction.followup.send.await_args.kwargs['embed']
+        self.assertIn('나니아', embed.title)
+        self.assertIn('저장된 기록', embed.description)
+
     async def test_notice_initialization_survives_missing_config(self):
         articles = [{"url": "https://example.org/one", "category": "공지", "title": "one"}]
         with patch.object(a.aion2_scraper, "get_latest_official_articles", new=AsyncMock(return_value=articles)):

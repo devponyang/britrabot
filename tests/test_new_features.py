@@ -75,6 +75,28 @@ class ArtifactTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(a.should_ping_alarm("important", "아티팩트쟁:22:00:10"))
         self.assertFalse(a.should_ping_alarm("none", "아티팩트쟁:22:00:0"))
 
+    def test_group_two_event_times_and_prealarms(self):
+        for day in (datetime.date(2026, 9, 30), datetime.date(2026, 10, 3)):
+            for hour, minute, event, lead in ((21, 20, '아티팩트쟁', 30), (21, 40, '아티팩트쟁', 10), (21, 50, '아티팩트쟁', 0), (22, 5, '어비스 필드보스', 10), (22, 15, '어비스 필드보스', 0)):
+                when = datetime.datetime.combine(day, datetime.time(hour, minute), tzinfo=a.KST)
+                keys = [key for key, _ in a.get_due_alarm_messages(when)]
+                start = '21:50' if event == '아티팩트쟁' else '22:15'
+                self.assertIn(f'{event}:{start}:{lead}', keys)
+            for hour, minute in ((22, 0), (22, 30)):
+                keys = [key for key, _ in a.get_due_alarm_messages(datetime.datetime.combine(day, datetime.time(hour, minute), tzinfo=a.KST))]
+                self.assertFalse(any(key.startswith(('아티팩트쟁:', '어비스 필드보스:')) for key in keys))
+
+    def test_nahma_friday_sunday_and_not_monday(self):
+        for day in (datetime.date(2026, 10, 2), datetime.date(2026, 10, 4)):
+            for hour, minute, lead in ((22, 0, 30), (22, 20, 10), (22, 30, 0)):
+                keys = [key for key, _ in a.get_due_alarm_messages(datetime.datetime.combine(day, datetime.time(hour, minute), tzinfo=a.KST))]
+                self.assertIn(f'나흐마:22:30:{lead}', keys)
+        self.assertFalse(any(key.startswith('나흐마:') for key, _ in a.get_due_alarm_messages(datetime.datetime(2026, 10, 5, 22, 0, tzinfo=a.KST))))
+
+    def test_artifact_time_change_preserves_old_rounds(self):
+        self.assertEqual(scraper.artifact_start_time('2026-09-26'), '22:00')
+        self.assertEqual(scraper.artifact_start_time('2026-09-30'), '21:50')
+
     def test_alarm_time_is_fixed_and_timestamp_is_send_time(self):
         now = datetime.datetime(2026, 9, 12, 16, 50, tzinfo=a.KST)
         embed = a.build_alarm_embed('', '카이라:17:00:10', alarm_time=now, now=now)

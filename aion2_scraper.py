@@ -181,13 +181,19 @@ def artifact_result_date(result, reference=None) -> datetime.date:
     return datetime.date(year, month, day)
 
 
+def artifact_start_time(date):
+    """Schedule change requested on 2026-09-29; preserve earlier round times."""
+    date = datetime.date.fromisoformat(date) if isinstance(date, str) else date
+    return "21:50" if date >= datetime.date(2026, 9, 29) else "22:00"
+
+
 def artifact_history_from_result(result, reference=None):
     record = result["record"]
     date = artifact_result_date(result, reference)
     opponent = record["opponent_server"]
     return {
         "pair": f"브리트라 VS {opponent}", "source_url": result["url"],
-        "records": [{"date": date.isoformat(), "time": "22:00", "round": record["round"],
+        "records": [{"date": date.isoformat(), "time": artifact_start_time(date), "round": record["round"],
                      "scores": [f"{record['breitra_round']}:{record['opponent_round']}"],
                      "cells": [], "images": [], "source": "current_match_card"}],
         "record": {"url": result["url"], "opponent_server": opponent,
@@ -291,7 +297,7 @@ def parse_artifact_history_rows(rows: list[dict]) -> list[dict]:
                 "round": date_match.group(2),
                 "scores": scores[:1],
                 "total_score": scores[1] if len(scores) > 1 else None,
-                "time": "22:00",
+                "time": artifact_start_time(date_match.group(1)),
                 "cells": cell_texts,
                 "images": images,
             }

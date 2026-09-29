@@ -32,11 +32,11 @@ OFFICIAL_NOTICE_CHANNEL_IDS = {
 
 ALARM_SCHEDULE = (
     ("카이라", {0, 1, 2, 3, 4, 5, 6}, ((1, 0), (5, 0), (9, 0), (13, 0), (17, 0), (21, 0)), (30, 10)),
-    ("나흐마", {0, 4}, ((22, 0),), (30, 10)),
+    ("나흐마", {4, 6}, ((22, 30),), (30, 10)),
     ("시공쟁탈전", {0, 3, 5}, ((20, 0), (23, 0)), (30, 10)),
     ("어비스 균열지대", {1, 3}, ((22, 0),), (30, 10)),
-    ("아티팩트쟁", {2, 5}, ((22, 0),), (30, 10)),
-    ("어비스 필드보스", {2, 5}, ((22, 30),), (10,)),
+    ("아티팩트쟁", {2, 5}, ((21, 50),), (30, 10)),
+    ("어비스 필드보스", {2, 5}, ((22, 15),), (10,)),
 )
 
 EVENT_NAMES = [name for name, *_ in ALARM_SCHEDULE]
@@ -268,16 +268,16 @@ def latest_saved_artifact_opponent():
 
 
 def build_artifact_history_embed(opponent, history, *, live=False):
-    records = sorted(history.get("records", []), key=lambda item: (item.get("date", ""), item.get("time", "22:00")), reverse=True)
+    records = sorted(history.get("records", []), key=lambda item: (item.get("date", ""), item.get("time") or aion2_scraper.artifact_start_time(item["date"])), reverse=True)
     summary = history.get("record") or {}
     embed = discord.Embed(title=f"🏺 아티팩트 전적 · 브리트라 vs {opponent}",
                           url=summary.get("url") or history.get("source_url") or None, color=discord.Color.gold())
     embed.description = "최신 집계 결과를 확인했습니다." if live else "저장된 기록입니다. 실시간 집계와 차이가 있을 수 있어요."
     if records:
         latest = records[0]
-        embed.add_field(name=f"최근 경기 · {latest['date']} {latest.get('time', '22:00')} (KST) · {latest['round']}",
+        embed.add_field(name=f"최근 경기 · {latest['date']} {latest.get('time') or aion2_scraper.artifact_start_time(latest['date'])} (KST) · {latest['round']}",
                         value=f"브리트라 : {opponent} = **{(latest.get('scores') or ['확인 불가'])[0]}**", inline=False)
-        lines = [f"{item['date']} {item.get('time', '22:00')} · {item['round']} · **{(item.get('scores') or ['확인 불가'])[0]}**" for item in records]
+        lines = [f"{item['date']} {item.get('time') or aion2_scraper.artifact_start_time(item['date'])} · {item['round']} · **{(item.get('scores') or ['확인 불가'])[0]}**" for item in records]
         embed.add_field(name="회차별 결과 (브리트라 : 상대)", value="\n".join(lines), inline=False)
     else:
         embed.add_field(name="회차별 결과", value="상세 기록이 아직 없습니다.", inline=False)
@@ -929,8 +929,11 @@ class Automation(commands.Cog):
         expected_date = now.date()
         if now.hour < 3:
             expected_date -= datetime.timedelta(days=1)
-        elif (now.hour, now.minute) < (22, 30):
-            return
+        else:
+            hour, minute = map(int, aion2_scraper.artifact_start_time(expected_date).split(':'))
+            poll_start = now.replace(hour=hour, minute=minute, second=0, microsecond=0) + datetime.timedelta(minutes=30)
+            if now < poll_start:
+                return
         if expected_date.weekday() not in {2, 5}:
             return
 
@@ -1065,18 +1068,21 @@ class Automation(commands.Cog):
             f"✅ 아티팩트쟁 상대 서버를 **{server}**로 설정했어요."
         )
 
-    @app_commands.command(name="아티확인", description="최신 아티팩트 매칭 또는 지정한 과거 상대의 전적을 확인합니다.")
+    @app_commands.command(name="아티확인", description="설정한 상대 또는 직접 지정한 상대의 아티팩트 전적을 확인합니다.")
     @app_commands.guild_only()
     @app_commands.default_permissions(administrator=True)
     @app_commands.checks.has_permissions(administrator=True)
-    @app_commands.describe(server="과거 상대 서버를 조회할 때만 입력 (생략하면 최신 매칭)")
+    @app_commands.describe(server="조회할 상대 서버 (생략하면 /아티설정의 상대, 미설정 시 최신 매칭)")
     async def check_artifact_record(self, interaction: discord.Interaction, server: str | None = None):
         await interaction.response.defer(thinking=True)
-        latest = await self._refresh_latest_result() if server is None else None
-        opponent_server = server.strip() if server else (
+        explicit = server.strip() if server is not None else None
+        if explicit is not None and (not 1 <= len(explicit) <= 30 or explicit == "브리트라"):
+            return await interaction.followup.send("브리트라가 아닌 상대 서버 이름을 입력해주세요.", ephemeral=True)
+        configured = get_guild_config(interaction.guild.id).get("artifact_opponent_server")
+        latest = await self._refresh_latest_result() if explicit is None else None
+        opponent_server = explicit or configured or (
             latest["record"]["opponent_server"] if latest else latest_saved_artifact_opponent()
         )
-        opponent_server = opponent_server or get_guild_config(interaction.guild.id).get("artifact_opponent_server")
         if not opponent_server:
             await interaction.followup.send(
                 "❌ 먼저 `/아티설정`으로 브리트라의 상대 서버를 설정해주세요.", ephemeral=True
@@ -1084,6 +1090,20 @@ class Automation(commands.Cog):
             return
 
         history = load_artifact_history(f"브리트라 VS {opponent_server}")
+        live = bool(latest and latest["record"]["opponent_server"] == opponent_server)
+        if not history:
+            try:
+                async with asyncio.timeout(30):
+                    async with self._artifact_sync_lock:
+                        history = load_artifact_history(f"브리트라 VS {opponent_server}")
+                        if not history:
+                            fetched = await aion2_scraper.get_artifact_server_history(opponent_server)
+                            if fetched and fetched.get("pair") == f"브리트라 VS {opponent_server}" and fetched.get("records"):
+                                save_artifact_history(fetched)
+                                history = load_artifact_history(fetched["pair"])
+                                live = True
+            except Exception:
+                logger.exception("지정 상대 아티팩트 기록 조회 실패: %s", opponent_server)
         if not history:
             direct_chapter_history = load_artifact_chapter_matchups(
                 f"브리트라 VS {opponent_server}"
@@ -1133,7 +1153,8 @@ class Automation(commands.Cog):
             chapter_history = load_artifact_chapter_history(opponent_server)
             if not chapter_history:
                 await interaction.followup.send(
-                    f"❌ **{opponent_server}**의 저장된 아티팩트 기록이 없어요. 관리자에게 기록 데이터를 등록해달라고 해주세요."
+                    f"📋 **브리트라 vs {opponent_server}**의 경기 기록을 아직 확인하지 못했어요.\n"
+                    "경기 전이거나 원본 집계가 아직 등록되지 않았을 수 있고, 원본 조회에 실패했을 수도 있어요. 잠시 후 다시 확인해주세요."
                 )
                 return
 
@@ -1159,7 +1180,7 @@ class Automation(commands.Cog):
             await send_embed_pages(interaction, embed)
             return
 
-        embed = build_artifact_history_embed(opponent_server, history, live=latest is not None)
+        embed = build_artifact_history_embed(opponent_server, history, live=live)
         await send_embed_pages(interaction, embed)
 
     @app_commands.command(name="관리자패널", description="버튼으로 봇 설정을 관리하는 패널을 게시합니다.")
