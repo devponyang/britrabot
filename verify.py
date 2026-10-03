@@ -101,14 +101,18 @@ def verification_request(callback):
         outcome_token = VERIFICATION_OUTCOME.set(outcome)
         try:
             if checking:
+                # Acknowledge before disk reads or view construction. A deferred
+                # component update keeps edits on the existing private message.
+                await interaction.response.defer(thinking=False)
+                acknowledged = True
                 # Never mutate the shared persistent view: each message gets its own view.
                 article_url = get_guild_config(interaction.guild.id)["article_url"]
                 request_view = VerifyCodeView(article_url)
                 request_view.check_button.disabled = True
                 request_view.check_button.label = "인증 확인 중…"
-                await interaction.response.edit_message(view=request_view)
-                acknowledged = True
-                await interaction.edit_original_response(content=None, embed=build_verification_progress_embed())
+                await interaction.edit_original_response(
+                    content=None, embed=build_verification_progress_embed(), view=request_view
+                )
             else:
                 await interaction.response.defer(ephemeral=True, thinking=True)
                 acknowledged = True
@@ -124,17 +128,24 @@ def verification_request(callback):
                 except discord.HTTPException:
                     logger.exception("인증 중단 안내 전송 실패")
             raise
-        except Exception:
+        except Exception as error:
             logger.exception("인증 처리 실패: guild=%s user=%s", *key)
+            if isinstance(error, discord.HTTPException) and error.code in (10062, 40060):
+                # Expired or already acknowledged elsewhere: retrying the initial
+                # response cannot recover it. The next click is a fresh request.
+                return
             message = "⚠️ 인증 처리 중 오류가 발생했어요. 잠시 후 다시 시도해주세요. 실패 횟수는 추가되지 않아요."
             if outcome["committed"]:
                 message = "✅ 인증과 역할 부여는 완료됐어요. 닉네임 또는 추가 안내 처리는 완료하지 못했을 수 있어요."
-            if checking and acknowledged:
-                await finish_verification(interaction, message)
-            elif acknowledged:
-                await interaction.followup.send(message, ephemeral=True)
-            else:
-                await interaction.response.send_message(message, ephemeral=True)
+            try:
+                if checking and acknowledged:
+                    await finish_verification(interaction, message)
+                elif acknowledged:
+                    await interaction.followup.send(message, ephemeral=True)
+                else:
+                    await interaction.response.send_message(message, ephemeral=True)
+            except discord.HTTPException:
+                logger.exception("인증 오류 안내 전송 실패: guild=%s user=%s", *key)
         finally:
             try:
                 if request_view is not None and acknowledged:

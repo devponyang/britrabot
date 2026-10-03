@@ -53,7 +53,12 @@ class SafeView(discord.ui.View):
 
     async def on_error(self, interaction, error, item):
         logger.error("버튼 처리 실패", exc_info=error)
-        await respond(interaction, "⚠️ 작업에 실패했어요. 봇 권한을 확인하거나 잠시 후 다시 시도해주세요.")
+        if isinstance(error, discord.HTTPException) and error.code in (10062, 40060):
+            return
+        try:
+            await respond(interaction, "⚠️ 작업에 실패했어요. 봇 권한을 확인하거나 잠시 후 다시 시도해주세요.")
+        except discord.HTTPException:
+            logger.exception("버튼 오류 안내 전송 실패")
 
 
 class SafeModal(discord.ui.Modal):

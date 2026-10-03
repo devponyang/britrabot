@@ -108,10 +108,67 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
     def record(self):
         return state.get_pending_code(1, 10)
 
+    async def test_acknowledges_before_reading_config(self):
+        def config(_):
+            self.interaction.response.defer.assert_awaited_once_with(thinking=False)
+            return dict(self.config)
+        with patch.object(verify, "get_guild_config", side_effect=config):
+            await self.check()
+        self.assertTrue(self.record()["verified"])
+        self.interaction.response.edit_message.assert_not_awaited()
+
+    async def test_expired_ack_does_not_retry_or_consume_attempt_and_next_click_works(self):
+        self.interaction.response.defer.side_effect = discord.NotFound(
+            Mock(status=404, reason="Not Found"),
+            {"code": 10062, "message": "Unknown interaction"},
+        )
+        with self.assertLogs("verify", level="ERROR"):
+            await self.check()
+        self.interaction.response.send_message.assert_not_awaited()
+        self.interaction.followup.send.assert_not_awaited()
+        self.interaction.edit_original_response.assert_not_awaited()
+        self.comment.assert_not_awaited()
+        self.assertEqual(self.record()["attempts"], 0)
+        self.assertFalse(self.record()["verified"])
+        self.assertEqual(verify.IN_FLIGHT, set())
+        self.assertIsNone(verify.VERIFICATION_OUTCOME.get())
+        self.interaction.response.defer.side_effect = None
+        await self.check()
+        self.assertTrue(self.record()["verified"])
+
+    async def test_error_notice_failure_does_not_escape_or_keep_lock(self):
+        self.interaction.edit_original_response.side_effect = discord.NotFound(
+            Mock(status=404, reason="Not Found"),
+            {"code": 10008, "message": "Unknown Message"},
+        )
+        with self.assertLogs("verify", level="ERROR"):
+            await self.check()
+        self.comment.assert_not_awaited()
+        self.assertEqual(self.record()["attempts"], 0)
+        self.assertEqual(verify.IN_FLIGHT, set())
+
+    async def test_safe_view_does_not_respond_again_to_expired_interaction(self):
+        error = discord.NotFound(Mock(status=404, reason="Not Found"),
+                                 {"code": 10062, "message": "Unknown interaction"})
+        with self.assertLogs("discord_helpers", level="ERROR"):
+            await verify.VerifyCodeView().on_error(self.interaction, error, None)
+        self.interaction.response.send_message.assert_not_awaited()
+        self.interaction.followup.send.assert_not_awaited()
+
+    async def test_safe_view_contains_error_notice_failure(self):
+        self.interaction.response.is_done = Mock(return_value=False)
+        self.interaction.response.send_message.side_effect = discord.NotFound(
+            Mock(status=404, reason="Not Found"),
+            {"code": 10062, "message": "Unknown interaction"},
+        )
+        with self.assertLogs("discord_helpers", level="ERROR"):
+            await verify.VerifyCodeView().on_error(self.interaction, ValueError("failed"), None)
+        self.interaction.response.send_message.assert_awaited_once()
+
     async def test_button_disabled_during_lookup_and_stays_disabled_on_success(self):
         view = verify.VerifyCodeView()
         async def lookup(*args):
-            rendered = self.interaction.response.edit_message.await_args.kwargs["view"]
+            rendered = self.interaction.edit_original_response.await_args.kwargs["view"]
             self.assertTrue(rendered.check_button.disabled)
             self.assertFalse(view.check_button.disabled)
             return {"nickname": "test", "profile_url": "https://aion2.plaync.com/profile"}
@@ -343,7 +400,7 @@ class FlowTests(unittest.IsolatedAsyncioTestCase):
         await started.wait()
         await self.check()
         self.assertEqual(self.comment.await_count, 1)
-        self.interaction.response.edit_message.assert_awaited_once()
+        self.interaction.response.defer.assert_awaited_once_with(thinking=False)
         release.set()
         await first
         self.assertEqual(verify.IN_FLIGHT, set())
