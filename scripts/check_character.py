@@ -1,17 +1,26 @@
 """Read-only character diagnostic: no Discord login, no mutation."""
 import asyncio
+import argparse
 import json
+import platform
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import aion2_scraper as s
 
-URL = sys.argv[1] if len(sys.argv) > 1 else 'https://aion2.plaync.com/ko-kr/characters/2008/CUO8quJPF5gPWedlhvPi7OVDLqjQY7q8Z2tvHOHY0IU%3D'
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('url', nargs='?', default='https://aion2.plaync.com/ko-kr/characters/2008/CUO8quJPF5gPWedlhvPi7OVDLqjQY7q8Z2tvHOHY0IU%3D')
+parser.add_argument('--compare-locales', action='store_true', help='Compare en-US and ko-KR API responses without running verification')
+args = parser.parse_args()
+URL = args.url
 if not s.is_official_url(URL):
     raise SystemExit('Only official AION2 HTTPS profile URLs are accepted')
 async def main():
     try:
+        if args.compare_locales:
+            await compare_locales()
+            return
         async with s.browser_page() as page:
             failures = []
             http_errors = []
@@ -41,4 +50,39 @@ async def main():
         print(json.dumps({'character_info': info}, ensure_ascii=True))
     finally:
         await s.close_browser()
+
+
+async def compare_locales():
+    """Record only public API status and selected headers; never cookies/tokens."""
+    browser = await s._get_browser()
+    print(json.dumps({'platform': platform.system(), 'browser': browser.version}), flush=True)
+    for locale in ('en-US', 'ko-KR'):
+        page = await browser.new_page(locale=locale)
+        api_responses = []
+        try:
+            def record(response):
+                parsed = urlsplit(response.url)
+                if parsed.hostname == 'aion2.plaync.com' and parsed.path.startswith('/api/'):
+                    headers = response.headers
+                    api_responses.append({
+                        'path': parsed.path,
+                        'status': response.status,
+                        'method': response.request.method,
+                        'headers': {name: headers[name] for name in
+                                    ('content-type', 'server', 'via', 'x-cache', 'x-amz-cf-pop') if name in headers},
+                    })
+            page.on('response', record)
+            response = await page.goto(URL, wait_until='domcontentloaded', timeout=30000)
+            loaded = False
+            try:
+                await page.locator('.profile__info-desc').wait_for(timeout=20000)
+                loaded = True
+            except s.PlaywrightTimeoutError:
+                pass
+            print(json.dumps({'locale': locale, 'document_status': response.status if response else None,
+                              'profile_loaded': loaded, 'api_responses': api_responses}, ensure_ascii=True), flush=True)
+        finally:
+            await page.close()
+
+
 asyncio.run(main())
