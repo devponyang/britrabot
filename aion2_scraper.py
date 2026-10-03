@@ -9,7 +9,7 @@ from contextlib import asynccontextmanager
 from functools import wraps
 from urllib.parse import urlsplit, urlunsplit, urljoin
 
-from playwright.async_api import async_playwright
+from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
 # 실제 아이온2 게시판과 캐릭터 정보를 조회합니다.
 DUMMY_MODE = False
@@ -533,6 +533,21 @@ def parse_power_level(text):
     return int(value) if value == value.to_integral_value() else None
 
 
+async def load_character_detail(page, detail_url):
+    """Retry a transient detail-page timeout once, without weakening verification."""
+    for attempt in range(2):
+        try:
+            await goto_official(page, detail_url)
+            await page.locator(".profile__info-desc").wait_for(timeout=20000)
+            return
+        except PlaywrightTimeoutError as error:
+            # Do not log page contents: they are unnecessary for timeout diagnosis.
+            logger.warning("캐릭터 상세 로딩 시간 초과: attempt=%s/2 requested_path=%s final_path=%s",
+                           attempt + 1, urlsplit(detail_url).path, urlsplit(page.url).path)
+            if attempt == 1:
+                raise ScrapeUnavailable("Character profile did not load after 2 attempts") from error
+
+
 async def get_character_info(profile_url: str):
     """
     댓글 작성자의 프로필 페이지(profile_url)를 렌더링해서
@@ -568,13 +583,8 @@ async def get_character_info(profile_url: str):
         class_el = await page.query_selector(".classcard")
         class_name = (await class_el.inner_text()).strip() if class_el else None
 
-        await goto_official(page, detail_url)
-
+        await load_character_detail(page, detail_url)
         desc = page.locator(".profile__info-desc")
-        try:
-            await desc.wait_for(timeout=10000)
-        except Exception:
-            raise ScrapeUnavailable("Character profile did not load")
 
         name_el = await page.query_selector(".profile__info-name")
         if not name_el:

@@ -14,6 +14,27 @@ class ScraperTests(unittest.IsolatedAsyncioTestCase):
             with self.subTest(text=text):
                 self.assertIsNone(s.parse_power_level(text))
 
+    async def test_character_detail_retries_timeout_once(self):
+        page = Mock(url='https://aion2.plaync.com/ko-kr/characters/test')
+        page.locator.return_value.wait_for = AsyncMock(side_effect=[s.PlaywrightTimeoutError('slow'), None])
+        with patch.object(s, 'goto_official', AsyncMock()) as goto, self.assertLogs(s.logger, level='WARNING'):
+            await s.load_character_detail(page, page.url)
+        self.assertEqual(goto.await_count, 2)
+
+    async def test_character_detail_timeout_stops_after_two_attempts(self):
+        page = Mock(url='https://aion2.plaync.com/ko-kr/characters/test')
+        page.locator.return_value.wait_for = AsyncMock(side_effect=s.PlaywrightTimeoutError('slow'))
+        with patch.object(s, 'goto_official', AsyncMock()) as goto, self.assertLogs(s.logger, level='WARNING'), self.assertRaises(s.ScrapeUnavailable):
+            await s.load_character_detail(page, page.url)
+        self.assertEqual(goto.await_count, 2)
+
+    async def test_character_detail_does_not_retry_invalid_source(self):
+        page = Mock()
+        with patch.object(s, 'goto_official', AsyncMock(side_effect=s.ScrapeUnavailable('redirect'))) as goto, self.assertRaises(s.ScrapeUnavailable):
+            await s.load_character_detail(page, 'https://aion2.plaync.com/profile')
+        goto.assert_awaited_once()
+        page.locator.assert_not_called()
+
     def test_code_is_exact_token(self):
         self.assertTrue(s.contains_code("인증: `Code123`", "Code123"))
         self.assertFalse(s.contains_code("OtherCode123", "Code123"))
