@@ -12,13 +12,14 @@ import aion2_scraper as s
 parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('url', nargs='?', default='https://aion2.plaync.com/ko-kr/characters/2008/CUO8quJPF5gPWedlhvPi7OVDLqjQY7q8Z2tvHOHY0IU%3D')
 parser.add_argument('--compare-locales', action='store_true', help='Compare en-US and ko-KR API responses without running verification')
+parser.add_argument('--locale', choices=('en-US', 'ko-KR'), help='Probe one locale and include API error details')
 args = parser.parse_args()
 URL = args.url
 if not s.is_official_url(URL):
     raise SystemExit('Only official AION2 HTTPS profile URLs are accepted')
 async def main():
     try:
-        if args.compare_locales:
+        if args.compare_locales or args.locale:
             await compare_locales()
             return
         async with s.browser_page() as page:
@@ -56,13 +57,16 @@ async def compare_locales():
     """Record only public API status and selected headers; never cookies/tokens."""
     browser = await s._get_browser()
     print(json.dumps({'platform': platform.system(), 'browser': browser.version}), flush=True)
-    for locale in ('en-US', 'ko-KR'):
+    for locale in ((args.locale,) if args.locale else ('en-US', 'ko-KR')):
+        print(json.dumps({'locale': locale, 'stage': 'opening_page'}), flush=True)
         page = await browser.new_page(locale=locale)
         api_responses = []
+        error_responses = []
         try:
             def record(response):
                 parsed = urlsplit(response.url)
-                if parsed.hostname == 'aion2.plaync.com' and parsed.path.startswith('/api/'):
+                if (parsed.hostname == 'aion2.plaync.com' and parsed.path.startswith('/api/')
+                        and len(api_responses) < 30):
                     headers = response.headers
                     api_responses.append({
                         'path': parsed.path,
@@ -71,18 +75,39 @@ async def compare_locales():
                         'headers': {name: headers[name] for name in
                                     ('content-type', 'server', 'via', 'x-cache', 'x-amz-cf-pop') if name in headers},
                     })
+                    if response.status >= 400:
+                        error_responses.append((response, api_responses[-1]))
             page.on('response', record)
             response = await page.goto(URL, wait_until='domcontentloaded', timeout=30000)
+            print(json.dumps({'locale': locale, 'stage': 'waiting_for_profile', 'timeout_seconds': 20}), flush=True)
             loaded = False
             try:
                 await page.locator('.profile__info-desc').wait_for(timeout=20000)
                 loaded = True
             except s.PlaywrightTimeoutError:
                 pass
+            # Snapshot before awaiting bodies; callbacks may receive more responses.
+            await asyncio.gather(*(read_api_problem(reply, entry)
+                                   for reply, entry in list(error_responses)))
             print(json.dumps({'locale': locale, 'document_status': response.status if response else None,
                               'profile_loaded': loaded, 'api_responses': api_responses}, ensure_ascii=True), flush=True)
         finally:
             await page.close()
+
+
+async def read_api_problem(response, entry):
+    """Only selected error fields, no successful character data or auth headers."""
+    try:
+        async with asyncio.timeout(5):
+            payload = await response.json()
+        if isinstance(payload, dict):
+            entry['problem'] = {
+                key: value[:500] if isinstance(value, str) else value
+                for key in ('type', 'title', 'status', 'detail', 'code', 'message')
+                if isinstance(value := payload.get(key), (str, int, float))
+            }
+    except Exception as error:
+        entry['problem_read_error'] = type(error).__name__
 
 
 asyncio.run(main())
