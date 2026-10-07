@@ -6,6 +6,25 @@ import aion2_scraper as s
 
 
 class ScraperTests(unittest.IsolatedAsyncioTestCase):
+    async def test_browser_platform_override_is_optional_and_closes_page(self):
+        for platform in ("", "windows"):
+            with self.subTest(platform=platform):
+                page = Mock(close=AsyncMock())
+                browser = Mock(version="151.0.7922.34", new_page=AsyncMock(return_value=page))
+                with patch.dict(s.os.environ, {"AION2_BROWSER_PLATFORM": platform}), \
+                     patch.object(s, "_get_browser", AsyncMock(return_value=browser)):
+                    with self.assertRaises(ValueError):
+                        async with s.browser_page():
+                            raise ValueError("consumer failed")
+                page.close.assert_awaited_once()
+                if platform:
+                    options = browser.new_page.await_args.kwargs
+                    self.assertEqual(options["locale"], "ko-KR")
+                    self.assertIn("Windows NT 10.0; Win64; x64", options["user_agent"])
+                    self.assertIn("HeadlessChrome/151.0.7922.34", options["user_agent"])
+                else:
+                    browser.new_page.assert_awaited_once_with()
+
     def test_power_units_and_decimals(self):
         for text, expected in [('1M', 1000000), ('1.25M', 1250000), ('999k', 999000), ('450K', 450000), ('450', 450), ('1,000,000', 1000000), (' 1.05 m ', 1050000)]:
             with self.subTest(text=text):

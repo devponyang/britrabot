@@ -4,6 +4,7 @@ import asyncio
 import datetime
 import re
 import logging
+import os
 from decimal import Decimal
 from contextlib import asynccontextmanager
 from functools import wraps
@@ -59,7 +60,17 @@ def is_official_url(url):
 async def browser_page():
     async with _page_slots:
         browser = await _get_browser()
-        page = await browser.new_page()
+        options = {}
+        if os.environ.get("AION2_BROWSER_PLATFORM", "").lower() == "windows":
+            # Opt-in to the exact locale/User-Agent used by the VM diagnostic.
+            options = {
+                "locale": "ko-KR",
+                "user_agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                    f"(KHTML, like Gecko) HeadlessChrome/{browser.version} Safari/537.36"
+                ),
+            }
+        page = await browser.new_page(**options)
         try:
             yield page
         finally:
