@@ -182,8 +182,10 @@ def artifact_result_date(result, reference=None) -> datetime.date:
 
 
 def artifact_start_time(date):
-    """Schedule change requested on 2026-09-29; preserve earlier round times."""
+    """Apply dated schedule changes while preserving earlier round times."""
     date = datetime.date.fromisoformat(date) if isinstance(date, str) else date
+    if date >= datetime.date(2026, 10, 7):
+        return "22:20"
     return "21:50" if date >= datetime.date(2026, 9, 29) else "22:00"
 
 

@@ -75,27 +75,37 @@ class ArtifactTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(a.should_ping_alarm("important", "아티팩트쟁:22:00:10"))
         self.assertFalse(a.should_ping_alarm("none", "아티팩트쟁:22:00:0"))
 
-    def test_group_two_event_times_and_prealarms(self):
-        for day in (datetime.date(2026, 9, 30), datetime.date(2026, 10, 3)):
-            for hour, minute, event, lead in ((21, 20, '아티팩트쟁', 30), (21, 40, '아티팩트쟁', 10), (21, 50, '아티팩트쟁', 0), (22, 5, '어비스 필드보스', 10), (22, 15, '어비스 필드보스', 0)):
+    def test_group_three_event_times_and_prealarms(self):
+        for day in (datetime.date(2026, 10, 7), datetime.date(2026, 10, 10)):
+            for hour, minute, event, lead in ((21, 50, '아티팩트쟁', 30), (22, 10, '아티팩트쟁', 10), (22, 20, '아티팩트쟁', 0), (22, 35, '어비스 필드보스', 10), (22, 45, '어비스 필드보스', 0)):
                 when = datetime.datetime.combine(day, datetime.time(hour, minute), tzinfo=a.KST)
                 keys = [key for key, _ in a.get_due_alarm_messages(when)]
-                start = '21:50' if event == '아티팩트쟁' else '22:15'
+                start = '22:20' if event == '아티팩트쟁' else '22:45'
                 self.assertIn(f'{event}:{start}:{lead}', keys)
-            for hour, minute in ((22, 0), (22, 30)):
+            for hour, minute in ((21, 20), (21, 40), (22, 5), (22, 15)):
                 keys = [key for key, _ in a.get_due_alarm_messages(datetime.datetime.combine(day, datetime.time(hour, minute), tzinfo=a.KST))]
                 self.assertFalse(any(key.startswith(('아티팩트쟁:', '어비스 필드보스:')) for key in keys))
 
     def test_nahma_friday_sunday_and_not_monday(self):
-        for day in (datetime.date(2026, 10, 2), datetime.date(2026, 10, 4)):
-            for hour, minute, lead in ((22, 0, 30), (22, 20, 10), (22, 30, 0)):
+        for day in (datetime.date(2026, 10, 9), datetime.date(2026, 10, 11)):
+            for hour, minute, lead in ((22, 30, 30), (22, 50, 10), (23, 0, 0)):
                 keys = [key for key, _ in a.get_due_alarm_messages(datetime.datetime.combine(day, datetime.time(hour, minute), tzinfo=a.KST))]
-                self.assertIn(f'나흐마:22:30:{lead}', keys)
+                self.assertIn(f'나흐마:23:00:{lead}', keys)
         self.assertFalse(any(key.startswith('나흐마:') for key, _ in a.get_due_alarm_messages(datetime.datetime(2026, 10, 5, 22, 0, tzinfo=a.KST))))
 
     def test_artifact_time_change_preserves_old_rounds(self):
         self.assertEqual(scraper.artifact_start_time('2026-09-26'), '22:00')
         self.assertEqual(scraper.artifact_start_time('2026-09-30'), '21:50')
+        self.assertEqual(scraper.artifact_start_time('2026-10-06'), '21:50')
+        self.assertEqual(scraper.artifact_start_time('2026-10-07'), '22:20')
+
+    async def test_group_three_result_polling_starts_at_2250(self):
+        cog = a.Automation(Mock(guilds=[]))
+        with patch.object(scraper, 'get_latest_artifact_result', AsyncMock(return_value=None)) as fetch:
+            await cog._check_artifact_result(datetime.datetime(2026, 10, 7, 22, 49, tzinfo=a.KST))
+            fetch.assert_not_awaited()
+            await cog._check_artifact_result(datetime.datetime(2026, 10, 7, 22, 50, tzinfo=a.KST))
+            fetch.assert_awaited_once_with(datetime.date(2026, 10, 7))
 
     def test_alarm_time_is_fixed_and_timestamp_is_send_time(self):
         now = datetime.datetime(2026, 9, 12, 16, 50, tzinfo=a.KST)
@@ -107,6 +117,8 @@ class ArtifactTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(embed.timestamp, now)
 
     async def test_result_routes_to_new_channel(self):
+        self.result['record']['breitra_total'] = 10
+        self.result['record']['opponent_total'] = 14
         cfg = patch.object(a, "CONFIG_FILE", Path(a.ARTIFACT_RECORDS_FILE).with_name("config.json"))
         cfg.start()
         self.addCleanup(cfg.stop)
@@ -120,6 +132,10 @@ class ArtifactTests(unittest.IsolatedAsyncioTestCase):
         channel.send.assert_awaited_once()
         self.assertIsNone(channel.send.await_args.kwargs["content"])
         self.assertIn("이번 회차", channel.send.await_args.kwargs["embed"].fields[0].name)
+        fields = channel.send.await_args.kwargs['embed'].fields
+        self.assertEqual(fields[0].value, '브리트라 **2** : **4** 네자칸')
+        self.assertEqual(fields[1].name, '회차 통합 스코어 (누적)')
+        self.assertEqual(fields[1].value, '브리트라 **10** : **14** 네자칸')
 
 
 class VoiceTests(unittest.IsolatedAsyncioTestCase):

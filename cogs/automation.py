@@ -32,11 +32,11 @@ OFFICIAL_NOTICE_CHANNEL_IDS = {
 
 ALARM_SCHEDULE = (
     ("카이라", {0, 1, 2, 3, 4, 5, 6}, ((1, 0), (5, 0), (9, 0), (13, 0), (17, 0), (21, 0)), (30, 10)),
-    ("나흐마", {4, 6}, ((22, 30),), (30, 10)),
+    ("나흐마", {4, 6}, ((23, 0),), (30, 10)),
     ("시공쟁탈전", {0, 3, 5}, ((20, 0), (23, 0)), (30, 10)),
     ("어비스 균열지대", {1, 3}, ((22, 0),), (30, 10)),
-    ("아티팩트쟁", {2, 5}, ((21, 50),), (30, 10)),
-    ("어비스 필드보스", {2, 5}, ((22, 15),), (10,)),
+    ("아티팩트쟁", {2, 5}, ((22, 20),), (30, 10)),
+    ("어비스 필드보스", {2, 5}, ((22, 45),), (10,)),
 )
 
 EVENT_NAMES = [name for name, *_ in ALARM_SCHEDULE]
@@ -975,6 +975,14 @@ class Automation(commands.Cog):
                     value=(
                         f"브리트라 **{record['breitra_round']}** : "
                         f"**{record['opponent_round']}** {record['opponent_server']}"
+                    ),
+                    inline=False,
+                )
+                embed.add_field(
+                    name="회차 통합 스코어 (누적)",
+                    value=(
+                        f"브리트라 **{record['breitra_total']}** : "
+                        f"**{record['opponent_total']}** {record['opponent_server']}"
                     ),
                     inline=False,
                 )

@@ -13,13 +13,14 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument('url', nargs='?', default='https://aion2.plaync.com/ko-kr/characters/2008/CUO8quJPF5gPWedlhvPi7OVDLqjQY7q8Z2tvHOHY0IU%3D')
 parser.add_argument('--compare-locales', action='store_true', help='Compare en-US and ko-KR API responses without running verification')
 parser.add_argument('--locale', choices=('en-US', 'ko-KR'), help='Probe one locale and include API error details')
+parser.add_argument('--compare-platforms', action='store_true', help='Compare Windows/Linux User-Agent strings (does not emulate an OS)')
 args = parser.parse_args()
 URL = args.url
 if not s.is_official_url(URL):
     raise SystemExit('Only official AION2 HTTPS profile URLs are accepted')
 async def main():
     try:
-        if args.compare_locales or args.locale:
+        if args.compare_locales or args.locale or args.compare_platforms:
             await compare_locales()
             return
         async with s.browser_page() as page:
@@ -57,9 +58,18 @@ async def compare_locales():
     """Record only public API status and selected headers; never cookies/tokens."""
     browser = await s._get_browser()
     print(json.dumps({'platform': platform.system(), 'browser': browser.version}), flush=True)
-    for locale in ((args.locale,) if args.locale else ('en-US', 'ko-KR')):
-        print(json.dumps({'locale': locale, 'stage': 'opening_page'}), flush=True)
-        page = await browser.new_page(locale=locale)
+    cases = [(locale, None) for locale in ((args.locale,) if args.locale else ('en-US', 'ko-KR'))]
+    if args.compare_platforms:
+        cases = [(args.locale or 'ko-KR', os_name) for os_name in ('Linux', 'Windows')]
+    for locale, os_name in cases:
+        label = {'locale': locale, 'user_agent_platform': os_name or 'native'}
+        print(json.dumps({**label, 'stage': 'opening_page'}), flush=True)
+        options = {'locale': locale}
+        if os_name:
+            os_token = 'X11; Linux x86_64' if os_name == 'Linux' else 'Windows NT 10.0; Win64; x64'
+            options['user_agent'] = (f'Mozilla/5.0 ({os_token}) AppleWebKit/537.36 '
+                                     f'(KHTML, like Gecko) HeadlessChrome/{browser.version} Safari/537.36')
+        page = await browser.new_page(**options)
         api_responses = []
         error_responses = []
         try:
@@ -78,7 +88,12 @@ async def compare_locales():
                     if response.status >= 400:
                         error_responses.append((response, api_responses[-1]))
             page.on('response', record)
-            response = await page.goto(URL, wait_until='domcontentloaded', timeout=30000)
+            response = None
+            try:
+                response = await page.goto(URL, wait_until='domcontentloaded', timeout=30000)
+            except s.PlaywrightTimeoutError:
+                print(json.dumps({**label, 'stage': 'navigation_timeout',
+                                  'message': 'Collecting any API responses already received'}), flush=True)
             print(json.dumps({'locale': locale, 'stage': 'waiting_for_profile', 'timeout_seconds': 20}), flush=True)
             loaded = False
             try:
@@ -89,7 +104,7 @@ async def compare_locales():
             # Snapshot before awaiting bodies; callbacks may receive more responses.
             await asyncio.gather(*(read_api_problem(reply, entry)
                                    for reply, entry in list(error_responses)))
-            print(json.dumps({'locale': locale, 'document_status': response.status if response else None,
+            print(json.dumps({**label, 'document_status': response.status if response else None,
                               'profile_loaded': loaded, 'api_responses': api_responses}, ensure_ascii=True), flush=True)
         finally:
             await page.close()
