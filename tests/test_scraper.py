@@ -6,6 +6,20 @@ import aion2_scraper as s
 
 
 class ScraperTests(unittest.IsolatedAsyncioTestCase):
+    def test_class_comes_from_matching_character_api_not_weapon(self):
+        url = 'https://aion2.plaync.com/ko-kr/characters/2008/test%3D'
+        profile = {'characterId': 'test=', 'serverId': 2008,
+                   'characterName': '바이럴', 'className': '정령성'}
+        self.assertEqual(s.character_class_from_payload({'profile': profile}, url, '바이럴'), '정령성')
+        for key, value in [('characterId', 'other'), ('serverId', 2009),
+                           ('characterName', 'other'), ('className', '멸룡왕의 보주'),
+                           ('className', None)]:
+            with self.subTest(key=key):
+                self.assertIsNone(s.character_class_from_payload(
+                    {'profile': {**profile, key: value}}, url, '바이럴'))
+        for payload in (None, [], {}, {'profile': None}):
+            self.assertIsNone(s.character_class_from_payload(payload, url, '바이럴'))
+
     async def test_browser_platform_override_is_optional_and_closes_page(self):
         for platform in ("", "windows"):
             with self.subTest(platform=platform):

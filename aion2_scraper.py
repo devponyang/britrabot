@@ -8,7 +8,7 @@ import os
 from decimal import Decimal
 from contextlib import asynccontextmanager
 from functools import wraps
-from urllib.parse import urlsplit, urlunsplit, urljoin
+from urllib.parse import urlsplit, urlunsplit, urljoin, unquote
 
 from playwright.async_api import async_playwright, TimeoutError as PlaywrightTimeoutError
 
@@ -561,6 +561,24 @@ async def load_character_detail(page, detail_url):
                 raise ScrapeUnavailable("Character profile did not load after 2 attempts") from error
 
 
+def character_class_from_payload(payload, detail_url, nickname):
+    """Accept a class only from the character actually being verified."""
+    profile = payload.get("profile") if isinstance(payload, dict) else None
+    if not isinstance(profile, dict):
+        return None
+    parts = urlsplit(detail_url).path.rstrip("/").split("/")
+    if len(parts) < 3 or parts[-3] != "characters":
+        return None
+    if (profile.get("characterId") != unquote(parts[-1])
+            or str(profile.get("serverId")) != parts[-2]
+            or profile.get("characterName") != nickname):
+        return None
+    name = profile.get("className")
+    if name in ("검성", "수호성", "살성", "궁성", "마도성", "정령성", "치유성", "호법성", "권성"):
+        return name
+    return None
+
+
 async def get_character_info(profile_url: str):
     """
     댓글 작성자의 프로필 페이지(profile_url)를 렌더링해서
@@ -588,13 +606,14 @@ async def get_character_info(profile_url: str):
             (parsed_url.scheme, parsed_url.netloc, detail_path, parsed_url.query, "")
         )
 
-        await goto_official(page, profile_url)
-        try:
-            await page.locator(".classcard").wait_for(timeout=15000)
-        except Exception:
-            pass
-        class_el = await page.query_selector(".classcard")
-        class_name = (await class_el.inner_text()).strip() if class_el else None
+        info_responses = []
+        def remember_info(response):
+            if (is_official_url(response.url)
+                    and urlsplit(response.url).path == "/api/character/info"
+                    and response.status == 200):
+                info_responses.append(response)
+                del info_responses[:-3]
+        page.on("response", remember_info)
 
         await load_character_detail(page, detail_url)
         desc = page.locator(".profile__info-desc")
@@ -603,6 +622,16 @@ async def get_character_info(profile_url: str):
         if not name_el:
             return None
         nickname = (await name_el.inner_text()).strip()
+        class_name = None
+        for response in reversed(info_responses):
+            try:
+                async with asyncio.timeout(5):
+                    payload = await response.json()
+                class_name = character_class_from_payload(payload, detail_url, nickname)
+            except Exception:
+                logger.warning("캐릭터 직업 API 응답 판독 실패", exc_info=True)
+            if class_name:
+                break
 
         desc_handle = await desc.element_handle()
 
